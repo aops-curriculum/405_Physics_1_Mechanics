@@ -436,6 +436,7 @@ const CW = 600, CH = 500;
 const dpr = window.devicePixelRatio || 1;
 canvas.width = CW * dpr; canvas.height = CH * dpr;
 canvas.style.width = CW + 'px'; canvas.style.height = CH + 'px';
+canvas.style.touchAction = 'none';   // prevent browser scroll/gesture on touch devices
 ctx.scale(dpr, dpr);
 const SCALE = 56, GROUND = 472;          // px per m; ground line py
 let vpZoom = 1, vpPX = 0, vpPY = 0;
@@ -849,21 +850,26 @@ function drawTape() {
   // tape line
   ctx.strokeStyle = '#c9a227'; ctx.lineWidth = 2.4;
   ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
-  // base body (reel)
-  ctx.fillStyle = '#e9c46a'; ctx.strokeStyle = '#9c7a18'; ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.roundRect(x1 - 9, y1 - 9, 18, 18, 4); ctx.fill(); ctx.stroke();
+  // base body (reel) — transparent center lets scene show through for precise alignment
+  ctx.fillStyle = '#e9c46a';
+  ctx.beginPath();
+  ctx.roundRect(x1 - 9, y1 - 9, 18, 18, 4);
+  ctx.arc(x1, y1, 5.5, 0, 2 * Math.PI);  // inner circle punched as hole via evenodd
+  ctx.fill('evenodd');
+  ctx.beginPath(); ctx.roundRect(x1 - 9, y1 - 9, 18, 18, 4);
+  ctx.strokeStyle = '#9c7a18'; ctx.lineWidth = 1.5; ctx.stroke();
   // horizontal reference lines at exact base height, extending left and right of the box
   ctx.strokeStyle = '#7a5c10'; ctx.lineWidth = 1.8;
   ctx.beginPath();
   ctx.moveTo(x1 - 22, y1); ctx.lineTo(x1 - 9, y1);
   ctx.moveTo(x1 + 9, y1); ctx.lineTo(x1 + 22, y1);
   ctx.stroke();
-  // base: see-through circle + crosshair at the exact measurement point
+  // crosshair ring + arms visible against scene through the transparent center
   ctx.strokeStyle = '#5a3b00'; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.arc(x1, y1, 5, 0, 2 * Math.PI); ctx.stroke();
+  ctx.beginPath(); ctx.arc(x1, y1, 5.5, 0, 2 * Math.PI); ctx.stroke();
   ctx.beginPath();
-  ctx.moveTo(x1 - 5, y1); ctx.lineTo(x1 + 5, y1);
-  ctx.moveTo(x1, y1 - 5); ctx.lineTo(x1, y1 + 5);
+  ctx.moveTo(x1 - 9, y1); ctx.lineTo(x1 + 9, y1);
+  ctx.moveTo(x1, y1 - 9); ctx.lineTo(x1, y1 + 9);
   ctx.stroke();
   // tip: hollow circle + crosshair (no fill)
   const TR = 7;
@@ -903,6 +909,7 @@ function drawWatch() {
 
 const PLAY = { x: 300, y: 477, r: 16 }, STEP = { x: 338, y: 477, r: 11 };
 const RAD_N = { x: 170, y: 477 }, RAD_S = { x: 238, y: 477 };
+const ZOOM_M = { x: 385, y: 477, r: 10 }, ZOOM_P = { x: 413, y: 477, r: 10 };
 function drawTransport() {
   // slow-motion radios
   for (const [rd, lbl, on] of [[RAD_N, 'Normal', !slow], [RAD_S, 'Slow', slow]]) {
@@ -930,6 +937,16 @@ function drawTransport() {
   ctx.beginPath(); ctx.moveTo(STEP.x - 5, STEP.y - 5); ctx.lineTo(STEP.x + 2, STEP.y);
   ctx.lineTo(STEP.x - 5, STEP.y + 5); ctx.closePath(); ctx.fill();
   ctx.fillRect(STEP.x + 3, STEP.y - 5, 2.2, 10);
+  // zoom controls
+  for (const [zb, sym] of [[ZOOM_M, '−'], [ZOOM_P, '+']]) {
+    ctx.beginPath(); ctx.arc(zb.x, zb.y, zb.r, 0, 2 * Math.PI);
+    ctx.fillStyle = '#2f6fb3'; ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 14px Segoe UI'; ctx.textAlign = 'center';
+    ctx.fillText(sym, zb.x, zb.y + 5);
+  }
+  ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.font = '9px Segoe UI'; ctx.textAlign = 'center';
+  ctx.fillText(vpZoom.toFixed(1) + '×', (ZOOM_M.x + ZOOM_P.x) / 2, ZOOM_M.y - ZOOM_M.r - 2);
 }
 
 function drawHints() {
@@ -961,6 +978,7 @@ function frame(ts) {
 
 // --- Pointer interaction ---------------------------------------------------
 let dragKind = null, dragOff = { x: 0, y: 0 };
+let panDraftX = 0, panDraftY = 0;
 function hitSkater(mx, my) {
   return Math.hypot(mx - w2x(st.x), my - (w2y(st.y) - 20)) < 32;
 }
@@ -977,6 +995,12 @@ canvas.addEventListener('pointerdown', e => {
     }
     if (Math.hypot(mx - RAD_N.x, my - RAD_N.y) < 9 || (mx > RAD_N.x && mx < RAD_N.x + 56 && Math.abs(my - RAD_N.y) < 9)) { slow = false; return; }
     if (Math.hypot(mx - RAD_S.x, my - RAD_S.y) < 9 || (mx > RAD_S.x && mx < RAD_S.x + 40 && Math.abs(my - RAD_S.y) < 9)) { slow = true; return; }
+    if (Math.hypot(mx - ZOOM_M.x, my - ZOOM_M.y) < ZOOM_M.r + 4) {
+      const nz = Math.max(0.35, vpZoom / 1.25); const r = nz / vpZoom; vpPX *= r; vpPY *= r; vpZoom = nz; return;
+    }
+    if (Math.hypot(mx - ZOOM_P.x, my - ZOOM_P.y) < ZOOM_P.r + 4) {
+      const nz = Math.min(8, vpZoom * 1.25); const r = nz / vpZoom; vpPX *= r; vpPY *= r; vpZoom = nz; return;
+    }
   }
   // stopwatch
   if (showWatch) {
@@ -1008,8 +1032,8 @@ canvas.addEventListener('pointerdown', e => {
     st.x = x2w(mx); st.y = Math.max(0, y2w(my));
     return;
   }
-  // pan (background drag)
-  dragKind = 'pan'; dragOff = { x: vpPX - mx, y: vpPY - my };
+  // pan (background drag) — requires 5px movement before activating to avoid accidental pans
+  dragKind = 'pan'; panDraftX = mx; panDraftY = my; dragOff = { x: vpPX - mx, y: vpPY - my };
 });
 canvas.addEventListener('pointermove', e => {
   const mx = e.offsetX, my = e.offsetY;
@@ -1050,8 +1074,10 @@ canvas.addEventListener('pointermove', e => {
       st.x = q.x; st.y = q.y; st.em0 = 0.5 * st.v * st.v + g * q.y + st.eth;
     }
   } else if (dragKind === 'pan') {
-    vpPX = mx + dragOff.x;
-    vpPY = my + dragOff.y;
+    if (Math.hypot(mx - panDraftX, my - panDraftY) >= 5) {
+      vpPX = mx + dragOff.x;
+      vpPY = my + dragOff.y;
+    }
   }
 });
 function endDrag(e) {
@@ -1074,7 +1100,13 @@ canvas.addEventListener('wheel', e => {
   vpPY = (e.offsetY - CH/2) * (1 - f) + f * vpPY;
   vpZoom = newZoom;
 }, { passive: false });
-canvas.addEventListener('dblclick', () => { vpZoom = 1; vpPX = 0; vpPY = 0; });
+canvas.addEventListener('dblclick', e => {
+  // Don't reset zoom when double-clicking interactive elements (avoids cancelling stopwatch button etc.)
+  const mx = e.offsetX, my = e.offsetY;
+  if (showWatch && mx > watch.x && mx < watch.x + 92 && my > watch.y && my < watch.y + 58) return;
+  if (!HIDEHUD && Math.hypot(mx - PLAY.x, my - PLAY.y) < PLAY.r + 8) return;
+  vpZoom = 1; vpPX = 0; vpPY = 0;
+});
 
 // --- Panel controls ----------------------------------------------------------
 document.querySelectorAll('#trackBtns button').forEach(b =>

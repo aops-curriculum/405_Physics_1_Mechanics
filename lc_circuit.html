@@ -94,6 +94,10 @@
     const canvas = document.getElementById('c');
     const ctx = canvas.getContext('2d');
     const W = 500, H = 368;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+    ctx.scale(dpr, dpr);
 
     const Q = new URLSearchParams(location.search);
 

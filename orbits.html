@@ -117,6 +117,10 @@
     const canvas = document.getElementById('c');
     const ctx = canvas.getContext('2d');
     const W = 700, H = 430;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+    ctx.scale(dpr, dpr);
     const CX = 350, CY = 215;
     const SCALE = 110;          // px per distance unit
     const G = 4 * Math.PI * Math.PI;   // so a circular orbit at r=1 has T=1

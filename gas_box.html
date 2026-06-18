@@ -94,6 +94,10 @@
     const canvas = document.getElementById('c');
     const ctx = canvas.getContext('2d');
     const W = 420, H = 302;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+    ctx.scale(dpr, dpr);
 
     // Box interior (gas region)
     const BL = 14, BR = 320, BT = 34, BB = 292;

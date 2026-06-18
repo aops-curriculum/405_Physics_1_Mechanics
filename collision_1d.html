@@ -102,6 +102,10 @@
     const canvas = document.getElementById('c');
     const ctx = canvas.getContext('2d');
     const W = 600, H = 204;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+    ctx.scale(dpr, dpr);
     const PXM = 150;                 // px per meter
     // Box (the GIF capture region is the whole canvas)
     const BOX_L = 15, BOX_R = 585;   // interior walls, px

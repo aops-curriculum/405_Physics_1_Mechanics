@@ -433,6 +433,10 @@ if (!ctx.roundRect) ctx.roundRect = function (x, y, w, h, r) {   // older-browse
   this.arcTo(x, y, x + w, y, r); this.closePath();
 };
 const CW = 600, CH = 500;
+const dpr = window.devicePixelRatio || 1;
+canvas.width = CW * dpr; canvas.height = CH * dpr;
+canvas.style.width = CW + 'px'; canvas.style.height = CH + 'px';
+ctx.scale(dpr, dpr);
 const SCALE = 56, GROUND = 472;          // px per m; ground line py
 const w2x = x => x * SCALE, w2y = y => GROUND - y * SCALE;
 const x2w = px => px / SCALE, y2w = py => (GROUND - py) / SCALE;
@@ -453,7 +457,7 @@ if (LESSON === 'mch04') document.body.classList.add('mch04');
 let trackKey, pts, track, st, g, fric, stick, paused, slow, charType, lastDrop;
 let showBars, showSpeed, showGrid, showRef, showTape, showWatch;
 let refY = 0, placedOnce = false, selPt = 0;
-let watch = { x: 494, y: 388, run: false, t: 0 };
+let watch = { x: 490, y: 140, run: false, t: 0 };
 let tape = { x1: 9.8, y1: 0, x2: 9.8, y2: 1.4 };
 let barScale = 800;       // J full-scale, smoothed
 let acc = 0, lastTs = null;
@@ -527,7 +531,7 @@ function initFromParams() {
   paused = qFlag('paused', LESSON === 'mch04');   // MCH04 loads paused at the standard start
   refY = qNum('ref', 0);
   showRef = Q.has('ref');
-  watch = { x: 494, y: 388, run: false, t: 0 };
+  watch = { x: 490, y: 140, run: false, t: 0 };
   tape = { x1: 9.8, y1: 0, x2: 9.8, y2: 1.4 };
   placedOnce = false;
   barScale = 800;

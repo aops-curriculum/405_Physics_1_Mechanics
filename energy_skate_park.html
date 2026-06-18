@@ -438,8 +438,11 @@ canvas.width = CW * dpr; canvas.height = CH * dpr;
 canvas.style.width = CW + 'px'; canvas.style.height = CH + 'px';
 ctx.scale(dpr, dpr);
 const SCALE = 56, GROUND = 472;          // px per m; ground line py
-const w2x = x => x * SCALE, w2y = y => GROUND - y * SCALE;
-const x2w = px => px / SCALE, y2w = py => (GROUND - py) / SCALE;
+let vpZoom = 1, vpPX = 0, vpPY = 0;
+const w2x = wx => (wx * SCALE - CW/2) * vpZoom + CW/2 + vpPX;
+const w2y = wy => (GROUND - wy * SCALE - CH/2) * vpZoom + CH/2 + vpPY;
+const x2w = px => ((px - vpPX - CW/2) / vpZoom + CW/2) / SCALE;
+const y2w = py => (GROUND - CH/2 - (py - vpPY - CH/2) / vpZoom) / SCALE;
 
 // --- URL parameters ----------------------------------------------------------
 const Q = new URLSearchParams(location.search);
@@ -573,19 +576,25 @@ function energies() {
 
 // --- Drawing -----------------------------------------------------------------
 function draw() {
+  const gnd = w2y(0);                              // ground line in canvas px
+  const gc  = Math.max(0, Math.min(CH, gnd));      // clamped for fills
   // sky
-  const sky = ctx.createLinearGradient(0, 0, 0, GROUND);
-  sky.addColorStop(0, '#a9d7f2'); sky.addColorStop(1, '#e6f5fd');
-  ctx.fillStyle = sky; ctx.fillRect(0, 0, CW, GROUND);
+  ctx.fillStyle = '#e6f5fd'; ctx.fillRect(0, 0, CW, CH);
+  if (gc > 0) {
+    const sky = ctx.createLinearGradient(0, 0, 0, gc);
+    sky.addColorStop(0, '#a9d7f2'); sky.addColorStop(1, '#e6f5fd');
+    ctx.fillStyle = sky; ctx.fillRect(0, 0, CW, gc);
+  }
 
-  if (showGrid) drawGrid();
-  drawMountains();
+  if (showGrid) drawGrid(gc);
+  drawMountains(gnd);
 
   // ground
-  ctx.fillStyle = '#8fbf6f'; ctx.fillRect(0, GROUND, CW, 12);
-  ctx.fillStyle = '#c29b6e'; ctx.fillRect(0, GROUND + 12, CW, CH - GROUND - 12);
+  const gb = Math.max(5, 12 * vpZoom);
+  ctx.fillStyle = '#8fbf6f'; ctx.fillRect(0, gc, CW, gb);
+  ctx.fillStyle = '#c29b6e'; ctx.fillRect(0, gc + gb, CW, CH - gc - gb);
   ctx.strokeStyle = '#5a8f4d'; ctx.lineWidth = 2.5;
-  ctx.beginPath(); ctx.moveTo(0, GROUND); ctx.lineTo(CW, GROUND); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, gnd); ctx.lineTo(CW, gnd); ctx.stroke();
 
   if (showRef) drawRefLine();
   drawTrack();
@@ -598,10 +607,10 @@ function draw() {
   drawHints();
 }
 
-function drawGrid() {
+function drawGrid(gc) {
   ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(60,90,120,0.18)';
   for (let x = 0; x <= 10; x++) {
-    ctx.beginPath(); ctx.moveTo(w2x(x) + 0.5, 0); ctx.lineTo(w2x(x) + 0.5, GROUND); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(w2x(x) + 0.5, 0); ctx.lineTo(w2x(x) + 0.5, gc); ctx.stroke();
   }
   for (let y = 0; y <= 8; y++) {
     ctx.beginPath(); ctx.moveTo(0, w2y(y) + 0.5); ctx.lineTo(CW, w2y(y) + 0.5); ctx.stroke();
@@ -611,12 +620,12 @@ function drawGrid() {
     ctx.fillText(y === 0 ? '0 m' : String(y), 4, w2y(y) - 4);
 }
 
-function drawMountains() {
+function drawMountains(gnd) {
   ctx.fillStyle = '#a8b39c';
   ctx.beginPath();
-  ctx.moveTo(w2x(-0.1), GROUND);
+  ctx.moveTo(w2x(-0.1), gnd);
   ctx.lineTo(w2x(0.45), w2y(1.30)); ctx.lineTo(w2x(0.85), w2y(0.45));
-  ctx.lineTo(w2x(1.20), w2y(0.95)); ctx.lineTo(w2x(1.75), GROUND);
+  ctx.lineTo(w2x(1.20), w2y(0.95)); ctx.lineTo(w2x(1.75), gnd);
   ctx.closePath(); ctx.fill();
   ctx.fillStyle = '#f4f9f7';
   ctx.beginPath(); ctx.moveTo(w2x(0.31), w2y(0.97)); ctx.lineTo(w2x(0.45), w2y(1.30));
@@ -837,20 +846,35 @@ function drawDial() {
 function drawTape() {
   const x1 = w2x(tape.x1), y1 = w2y(tape.y1), x2 = w2x(tape.x2), y2 = w2y(tape.y2);
   const len = Math.hypot(tape.x2 - tape.x1, tape.y2 - tape.y1);
+  // tape line
   ctx.strokeStyle = '#c9a227'; ctx.lineWidth = 2.4;
   ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
-  // base body
+  // base body (reel)
   ctx.fillStyle = '#e9c46a'; ctx.strokeStyle = '#9c7a18'; ctx.lineWidth = 1.5;
   ctx.beginPath(); ctx.roundRect(x1 - 9, y1 - 9, 18, 18, 4); ctx.fill(); ctx.stroke();
-  ctx.beginPath(); ctx.arc(x1, y1, 3.5, 0, 2 * Math.PI); ctx.strokeStyle = '#7a5c10'; ctx.stroke();
-  // tip handle
-  ctx.strokeStyle = '#9c7a18'; ctx.lineWidth = 2.6;
-  const ux = (x2 - x1) / (Math.hypot(x2 - x1, y2 - y1) || 1), uy = (y2 - y1) / (Math.hypot(x2 - x1, y2 - y1) || 1);
-  ctx.beginPath(); ctx.moveTo(x2 - uy * 7, y2 + ux * 7); ctx.lineTo(x2 + uy * 7, y2 - ux * 7); ctx.stroke();
-  ctx.beginPath(); ctx.arc(x2, y2, 5, 0, 2 * Math.PI);
-  ctx.fillStyle = '#e9c46a'; ctx.fill(); ctx.strokeStyle = '#9c7a18'; ctx.lineWidth = 1.5; ctx.stroke();
+  // horizontal reference lines at exact base height, extending left and right of the box
+  ctx.strokeStyle = '#7a5c10'; ctx.lineWidth = 1.8;
+  ctx.beginPath();
+  ctx.moveTo(x1 - 22, y1); ctx.lineTo(x1 - 9, y1);
+  ctx.moveTo(x1 + 9, y1); ctx.lineTo(x1 + 22, y1);
+  ctx.stroke();
+  // base: see-through circle + crosshair at the exact measurement point
+  ctx.strokeStyle = '#5a3b00'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(x1, y1, 5, 0, 2 * Math.PI); ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x1 - 5, y1); ctx.lineTo(x1 + 5, y1);
+  ctx.moveTo(x1, y1 - 5); ctx.lineTo(x1, y1 + 5);
+  ctx.stroke();
+  // tip: hollow circle + crosshair (no fill)
+  const TR = 7;
+  ctx.strokeStyle = '#9c7a18'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.arc(x2, y2, TR, 0, 2 * Math.PI); ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x2 - TR, y2); ctx.lineTo(x2 + TR, y2);
+  ctx.moveTo(x2, y2 - TR); ctx.lineTo(x2, y2 + TR);
+  ctx.stroke();
   // readout near tip
-  const rx = Math.min(CW - 70, Math.max(4, x2 + 10)), ry = Math.max(14, y2 - 12);
+  const rx = Math.min(CW - 70, Math.max(4, x2 + 12)), ry = Math.max(14, y2 - 12);
   ctx.fillStyle = 'rgba(255,255,255,0.95)'; ctx.strokeStyle = '#b9c6d2'; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.roundRect(rx, ry - 11, 62, 16, 3); ctx.fill(); ctx.stroke();
   ctx.fillStyle = '#7a5c10'; ctx.font = 'bold 11px Segoe UI'; ctx.textAlign = 'left';
@@ -984,6 +1008,8 @@ canvas.addEventListener('pointerdown', e => {
     st.x = x2w(mx); st.y = Math.max(0, y2w(my));
     return;
   }
+  // pan (background drag)
+  dragKind = 'pan'; dragOff = { x: vpPX - mx, y: vpPY - my };
 });
 canvas.addEventListener('pointermove', e => {
   const mx = e.offsetX, my = e.offsetY;
@@ -994,7 +1020,7 @@ canvas.addEventListener('pointermove', e => {
       (showRef && Math.abs(my - w2y(refY)) < 12 && mx > 186 && mx < 226);
     if (PRESETS[trackKey].editable)
       for (const p of pts) if (Math.hypot(mx - w2x(p[0]), my - w2y(p[1])) < 12) hov = true;
-    canvas.style.cursor = hov ? 'grab' : 'default';
+    canvas.style.cursor = (hov || vpZoom !== 1) ? 'grab' : 'default';
     return;
   }
   canvas.style.cursor = 'grabbing';
@@ -1023,6 +1049,9 @@ canvas.addEventListener('pointermove', e => {
       const q = trackQuery(track, st.s);
       st.x = q.x; st.y = q.y; st.em0 = 0.5 * st.v * st.v + g * q.y + st.eth;
     }
+  } else if (dragKind === 'pan') {
+    vpPX = mx + dragOff.x;
+    vpPY = my + dragOff.y;
   }
 });
 function endDrag(e) {
@@ -1035,6 +1064,17 @@ function endDrag(e) {
 }
 canvas.addEventListener('pointerup', endDrag);
 canvas.addEventListener('pointercancel', endDrag);
+// scroll to zoom about the mouse point; double-click to reset
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  const newZoom = Math.max(0.35, Math.min(8, vpZoom * factor));
+  const f = newZoom / vpZoom;
+  vpPX = (e.offsetX - CW/2) * (1 - f) + f * vpPX;
+  vpPY = (e.offsetY - CH/2) * (1 - f) + f * vpPY;
+  vpZoom = newZoom;
+}, { passive: false });
+canvas.addEventListener('dblclick', () => { vpZoom = 1; vpPX = 0; vpPY = 0; });
 
 // --- Panel controls ----------------------------------------------------------
 document.querySelectorAll('#trackBtns button').forEach(b =>

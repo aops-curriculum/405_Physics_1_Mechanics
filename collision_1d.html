@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>1D Collisions</title>
+  <!-- Original AoPS interactive. Replaces the third-party "Collision Lab" simulation. -->
+<script>
+// EigenNode auto-height v2.4
+(function() {
+  // 4px buffer for subpixel rounding + parent's >=3px noise threshold.
+  // Extra 18px when horizontal overflow forces a scrollbar (eats vertical
+  // space inside the iframe — AoPS classroom embeds in a narrower column
+  // than the 600px content, so a horizontal scrollbar appears and steals
+  // ~10-17px of height). Without this, the iframe ends up ~11-15px short.
+  var BUFFER = 4;
+  var H_SCROLLBAR = 18;
+  var measuring = false;
+  function measure() {
+    if (measuring) return 0;
+    var b = document.body, h = document.documentElement;
+    if (!b) return 0;
+    measuring = true;
+    // Temporarily neutralise body's height/min-height (overriding stylesheet
+    // rules with !important) so scrollHeight reflects actual content extent.
+    // Without this, patterns like body { height: 100vh } cause scrollHeight
+    // to echo the iframe's current viewport — adding BUFFER each cycle
+    // ratchets the iframe taller forever. Browser doesn't paint until this
+    // synchronous block returns, so no visible flicker.
+    var hOld = b.style.height, hPri = b.style.getPropertyPriority('height');
+    var mOld = b.style.minHeight, mPri = b.style.getPropertyPriority('min-height');
+    b.style.setProperty('height', 'auto', 'important');
+    b.style.setProperty('min-height', '0', 'important');
+    var content = b.scrollHeight || 0;
+    if (hOld) b.style.setProperty('height', hOld, hPri); else b.style.removeProperty('height');
+    if (mOld) b.style.setProperty('min-height', mOld, mPri); else b.style.removeProperty('min-height');
+    measuring = false;
+    // Check the documentElement only — that's the element that owns the
+    // iframe's horizontal scrollbar. Body can be narrower than the iframe
+    // (e.g. body{width:600px} centered in a 700px iframe) and have its own
+    // 1-2px overflow that doesn't actually trigger a scrollbar.
+    var hOverflow = h && (h.scrollWidth - h.clientWidth) >= 4;
+    return Math.ceil(content) + BUFFER + (hOverflow ? H_SCROLLBAR : 0);
+  }
+  var last = 0;
+  function report() {
+    var h = measure();
+    if (h > 0 && Math.abs(h - last) >= 2) {
+      last = h;
+      window.parent.postMessage({ type: 'resize', height: h }, '*');
+    }
+  }
+  window.addEventListener('load', report);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(report);
+  if (window.ResizeObserver && document.body) new ResizeObserver(report).observe(document.body);
+})();
+</script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 600px; height: 250px; overflow: hidden;
+      background: #f8f9fe;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    canvas { display: block; }
+    #ui {
+      width: 600px; height: 46px; padding: 0 8px;
+      font-size: 11px; color: #334455;
+      display: flex; align-items: center; gap: 7px;
+    }
+    button {
+      font-family: inherit; font-size: 11px; padding: 2px 8px;
+      border: 1px solid #b8c4d4; border-radius: 4px;
+      background: #ffffff; color: #334455; cursor: pointer;
+    }
+    button:hover { background: #eef3f9; }
+    label { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+    input[type=number] {
+      width: 46px; font-family: inherit; font-size: 11px; padding: 1px 2px;
+      border: 1px solid #b8c4d4; border-radius: 3px; color: #334455;
+    }
+    input[type=range] { vertical-align: middle; }
+    .u { color: #889; }
+  </style>
+</head>
+<body>
+  <canvas id="c" width="600" height="204"></canvas>
+  <div id="ui">
+    <button id="playBtn">&#10074;&#10074;</button>
+    <button id="resetBtn">&#8634;</button>
+    <label><input type="checkbox" id="slowCk"> Slow</label>
+    <label>m&#8321; <input type="number" id="m1" min="0.1" max="50" step="0.5" value="1"><span class="u">kg</span></label>
+    <label>m&#8322; <input type="number" id="m2" min="0.1" max="50" step="0.5" value="3"><span class="u">kg</span></label>
+    <label>v&#8321; <input type="number" id="v1" min="-5" max="5" step="0.5" value="1"><span class="u">m/s</span></label>
+    <label>v&#8322; <input type="number" id="v2" min="-5" max="5" step="0.5" value="-1"><span class="u">m/s</span></label>
+    <label>elasticity <input type="range" id="el" min="0" max="1" step="0.05" value="1" style="width:80px"></label>
+    <span id="elVal" style="min-width:28px">1.00</span>
+  </div>
+  <script>
+  (() => {
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    const W = 600, H = 204;
+    const PXM = 150;                 // px per meter
+    // Box (the GIF capture region is the whole canvas)
+    const BOX_L = 15, BOX_R = 585;   // interior walls, px
+    const BOX_T = 30, BOX_B = 196;   // outer rect top/bottom, px
+    const WM = (BOX_R - BOX_L) / PXM;   // interior width = 3.8 m
+    const BALL_Y = 115;              // ball centerline, px
+    const ARROW_PX = 55;             // px per (m/s) of velocity arrow
+
+    const Q = new URLSearchParams(location.search);
+    const qf = (k, d) => {
+      const v = parseFloat(Q.get(k));
+      return isFinite(v) ? v : d;
+    };
+    const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+    // ── Parameters (URL: ?m1=1&m2=3&v1=1&v2=-1&e=1[&x1=&x2=&slow=1&paused=1]) ──
+    const P = {
+      m1: clamp(qf('m1', 1), 0.1, 50),
+      m2: clamp(qf('m2', 3), 0.1, 50),
+      v1: clamp(qf('v1', 1), -5, 5),
+      v2: clamp(qf('v2', -1), -5, 5),
+      e:  clamp(qf('e', 1), 0, 1),
+      x1: qf('x1', NaN),               // meters from left interior wall (optional)
+      x2: qf('x2', NaN),
+    };
+
+    const radiusM = m => clamp(24 * Math.cbrt(m), 9, 55) / PXM;
+
+    // ── State ────────────────────────────────────────────────
+    const S = { m1: 1, m2: 3, r1: 0, r2: 0, x1: 0, x2: 0, v1: 0, v2: 0, e: 1 };
+    let playing = true;
+
+    function init() {
+      S.m1 = P.m1; S.m2 = P.m2; S.e = P.e;
+      S.r1 = radiusM(S.m1); S.r2 = radiusM(S.m2);
+      // Default start: each ball touching its wall, so the standard
+      // m1:m2 = 1:3 cycle (approach at v0/2 each) loops exactly.
+      S.x1 = isFinite(P.x1) ? clamp(P.x1, S.r1, WM - S.r1) : S.r1;
+      S.x2 = isFinite(P.x2) ? clamp(P.x2, S.r2, WM - S.r2) : WM - S.r2;
+      if (S.x2 - S.x1 < S.r1 + S.r2) {  // separate if overlapping
+        const mid = (S.x1 + S.x2) / 2;
+        S.x1 = mid - (S.r1 + S.r2) / 2 - 0.001;
+        S.x2 = mid + (S.r1 + S.r2) / 2 + 0.001;
+      }
+      S.v1 = P.v1; S.v2 = P.v2;
+    }
+
+    // ── Physics: exact event-driven 1D advance ───────────────
+    function ballBallImpulse() {
+      const { m1, m2, e } = S, u1 = S.v1, u2 = S.v2;
+      const pm = m1 * u1 + m2 * u2;
+      S.v1 = (pm + m2 * e * (u2 - u1)) / (m1 + m2);
+      S.v2 = (pm + m1 * e * (u1 - u2)) / (m1 + m2);
+    }
+
+    function advance(dt) {
+      let rem = dt, guard = 0;
+      while (rem > 1e-9 && guard++ < 80) {
+        let tHit = rem, kind = null;
+        if (S.v1 < 0) { const t = (S.x1 - S.r1) / -S.v1;       if (t < tHit) { tHit = t; kind = 'w1'; } }
+        if (S.v1 > 0) { const t = (WM - S.r1 - S.x1) / S.v1;   if (t < tHit) { tHit = t; kind = 'w1'; } }
+        if (S.v2 < 0) { const t = (S.x2 - S.r2) / -S.v2;       if (t < tHit) { tHit = t; kind = 'w2'; } }
+        if (S.v2 > 0) { const t = (WM - S.r2 - S.x2) / S.v2;   if (t < tHit) { tHit = t; kind = 'w2'; } }
+        if (S.v1 > S.v2) {
+          const t = (S.x2 - S.x1 - (S.r1 + S.r2)) / (S.v1 - S.v2);
+          if (t >= 0 && t < tHit) { tHit = t; kind = 'bb'; }
+        }
+        S.x1 += S.v1 * tHit;
+        S.x2 += S.v2 * tHit;
+        rem -= tHit;
+        if (kind === 'w1') S.v1 = -S.v1;            // walls always elastic
+        else if (kind === 'w2') S.v2 = -S.v2;
+        else if (kind === 'bb') ballBallImpulse();
+        else break;
+      }
+      S.x1 = clamp(S.x1, S.r1, WM - S.r1);
+      S.x2 = clamp(S.x2, S.r2, WM - S.r2);
+    }
+
+    // ── Drawing ──────────────────────────────────────────────
+    function drawArrow(x0, y0, dx, color) {
+      if (Math.abs(dx) < 4) return;
+      const dir = Math.sign(dx), hs = 13;
+      ctx.save();
+      ctx.strokeStyle = '#0a7a0a'; ctx.fillStyle = color;
+      ctx.lineWidth = 5.5; ctx.lineCap = 'butt';
+      ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x0 + dx - dir * hs * 0.6, y0); ctx.stroke();
+      ctx.strokeStyle = color; ctx.lineWidth = 3.2;
+      ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x0 + dx - dir * hs * 0.6, y0); ctx.stroke();
+      // head (outlined)
+      ctx.beginPath();
+      ctx.moveTo(x0 + dx, y0);
+      ctx.lineTo(x0 + dx - dir * hs, y0 - hs * 0.5);
+      ctx.lineTo(x0 + dx - dir * hs, y0 + hs * 0.5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = '#0a7a0a'; ctx.lineWidth = 1.4; ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawBall(xm, rm, fill, label) {
+      const px = BOX_L + xm * PXM, r = rm * PXM;
+      const g = ctx.createRadialGradient(px - r * 0.35, BALL_Y - r * 0.35, r * 0.15,
+                                         px, BALL_Y, r);
+      g.addColorStop(0, '#ffffff');
+      g.addColorStop(0.3, fill);
+      g.addColorStop(1, fill);
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(px, BALL_Y, r, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = 'rgba(20,30,80,0.65)'; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.fillStyle = '#1a2a6a';
+      ctx.font = 'bold 15px Segoe UI'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(label, px, BALL_Y + 1);
+      ctx.textBaseline = 'alphabetic';
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, W, H);
+      ctx.fillStyle = '#f8f9fe'; ctx.fillRect(0, 0, W, H);
+
+      // 0.5 m scale bar (top-left, above the box)
+      const sbY = 14, sbX = BOX_L, sbW = 0.5 * PXM;
+      ctx.strokeStyle = '#222'; ctx.fillStyle = '#222'; ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(sbX, sbY); ctx.lineTo(sbX + sbW, sbY);
+      ctx.moveTo(sbX, sbY - 5); ctx.lineTo(sbX, sbY + 5);
+      ctx.moveTo(sbX + sbW, sbY - 5); ctx.lineTo(sbX + sbW, sbY + 5);
+      ctx.stroke();
+      // small arrowheads
+      ctx.beginPath();
+      ctx.moveTo(sbX + 2, sbY); ctx.lineTo(sbX + 9, sbY - 3.5); ctx.lineTo(sbX + 9, sbY + 3.5);
+      ctx.closePath(); ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(sbX + sbW - 2, sbY); ctx.lineTo(sbX + sbW - 9, sbY - 3.5); ctx.lineTo(sbX + sbW - 9, sbY + 3.5);
+      ctx.closePath(); ctx.fill();
+      ctx.font = '12px Segoe UI'; ctx.textAlign = 'center';
+      ctx.fillText('0.5 m', sbX + sbW / 2, sbY - 7);
+
+      // bordered box
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(BOX_L - 2, BOX_T, BOX_R - BOX_L + 4, BOX_B - BOX_T);
+      ctx.strokeStyle = '#223a8c'; ctx.lineWidth = 2.5;
+      ctx.strokeRect(BOX_L - 2, BOX_T, BOX_R - BOX_L + 4, BOX_B - BOX_T);
+
+      // ruler ticks along the inside top edge (every 0.1 m; longer every 0.5 m)
+      ctx.strokeStyle = '#5a6a9a'; ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let m = 0; m <= WM + 1e-9; m += 0.1) {
+        const tx = BOX_L + m * PXM;
+        if (tx > BOX_R) break;
+        const long = (Math.round(m * 10) % 5 === 0);
+        ctx.moveTo(tx, BOX_T + 1);
+        ctx.lineTo(tx, BOX_T + (long ? 11 : 6));
+      }
+      ctx.stroke();
+
+      // balls + velocity arrows
+      drawBall(S.x1, S.r1, '#35dcd2', '1');
+      drawBall(S.x2, S.r2, '#ee2fae', '2');
+      drawArrow(BOX_L + S.x1 * PXM, BALL_Y, S.v1 * ARROW_PX, '#33dd33');
+      drawArrow(BOX_L + S.x2 * PXM, BALL_Y, S.v2 * ARROW_PX, '#33dd33');
+    }
+
+    // ── Animation loop ───────────────────────────────────────
+    let lastTs = null;
+    function frame(ts) {
+      if (lastTs === null) lastTs = ts;
+      const dt = Math.min((ts - lastTs) / 1000, 0.05);
+      lastTs = ts;
+      if (playing) advance(dt * (slowCk.checked ? 0.25 : 1));
+      draw();
+      requestAnimationFrame(frame);
+    }
+
+    // ── Controls ─────────────────────────────────────────────
+    const playBtn = document.getElementById('playBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const slowCk = document.getElementById('slowCk');
+    const m1In = document.getElementById('m1'), m2In = document.getElementById('m2');
+    const v1In = document.getElementById('v1'), v2In = document.getElementById('v2');
+    const elIn = document.getElementById('el'), elVal = document.getElementById('elVal');
+
+    function updatePlayBtn() {
+      playBtn.innerHTML = playing ? '&#10074;&#10074;' : '&#9654;';
+    }
+    playBtn.addEventListener('click', () => { playing = !playing; updatePlayBtn(); });
+    resetBtn.addEventListener('click', () => {
+      init(); playing = false; updatePlayBtn();
+    });
+
+    function readInputs() {
+      P.m1 = clamp(parseFloat(m1In.value) || 1, 0.1, 50);
+      P.m2 = clamp(parseFloat(m2In.value) || 1, 0.1, 50);
+      P.v1 = clamp(parseFloat(v1In.value) || 0, -5, 5);
+      P.v2 = clamp(parseFloat(v2In.value) || 0, -5, 5);
+      P.e  = clamp(parseFloat(elIn.value), 0, 1);
+      P.x1 = NaN; P.x2 = NaN;          // edits restart from wall positions
+      elVal.textContent = P.e.toFixed(2);
+      init();
+    }
+    [m1In, m2In, v1In, v2In].forEach(el => el.addEventListener('change', readInputs));
+    elIn.addEventListener('input', () => {
+      P.e = clamp(parseFloat(elIn.value), 0, 1);
+      S.e = P.e;                        // elasticity applies live
+      elVal.textContent = P.e.toFixed(2);
+    });
+
+    // reflect URL params in the controls
+    m1In.value = P.m1; m2In.value = P.m2;
+    v1In.value = P.v1; v2In.value = P.v2;
+    elIn.value = P.e; elVal.textContent = P.e.toFixed(2);
+    if (Q.get('slow') === '1') slowCk.checked = true;
+    if (Q.get('paused') === '1') playing = false;
+
+    init();
+    updatePlayBtn();
+    requestAnimationFrame(frame);
+  })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>LC Circuit</title>
+  <!-- Original AoPS interactive. Replaces the third-party "Circuit Construction Kit: DC" simulation. -->
+<script>
+// EigenNode auto-height v2.4
+(function() {
+  // 4px buffer for subpixel rounding + parent's >=3px noise threshold.
+  // Extra 18px when horizontal overflow forces a scrollbar (eats vertical
+  // space inside the iframe — AoPS classroom embeds in a narrower column
+  // than the 600px content, so a horizontal scrollbar appears and steals
+  // ~10-17px of height). Without this, the iframe ends up ~11-15px short.
+  var BUFFER = 4;
+  var H_SCROLLBAR = 18;
+  var measuring = false;
+  function measure() {
+    if (measuring) return 0;
+    var b = document.body, h = document.documentElement;
+    if (!b) return 0;
+    measuring = true;
+    // Temporarily neutralise body's height/min-height (overriding stylesheet
+    // rules with !important) so scrollHeight reflects actual content extent.
+    // Without this, patterns like body { height: 100vh } cause scrollHeight
+    // to echo the iframe's current viewport — adding BUFFER each cycle
+    // ratchets the iframe taller forever. Browser doesn't paint until this
+    // synchronous block returns, so no visible flicker.
+    var hOld = b.style.height, hPri = b.style.getPropertyPriority('height');
+    var mOld = b.style.minHeight, mPri = b.style.getPropertyPriority('min-height');
+    b.style.setProperty('height', 'auto', 'important');
+    b.style.setProperty('min-height', '0', 'important');
+    var content = b.scrollHeight || 0;
+    if (hOld) b.style.setProperty('height', hOld, hPri); else b.style.removeProperty('height');
+    if (mOld) b.style.setProperty('min-height', mOld, mPri); else b.style.removeProperty('min-height');
+    measuring = false;
+    // Check the documentElement only — that's the element that owns the
+    // iframe's horizontal scrollbar. Body can be narrower than the iframe
+    // (e.g. body{width:600px} centered in a 700px iframe) and have its own
+    // 1-2px overflow that doesn't actually trigger a scrollbar.
+    var hOverflow = h && (h.scrollWidth - h.clientWidth) >= 4;
+    return Math.ceil(content) + BUFFER + (hOverflow ? H_SCROLLBAR : 0);
+  }
+  var last = 0;
+  function report() {
+    var h = measure();
+    if (h > 0 && Math.abs(h - last) >= 2) {
+      last = h;
+      window.parent.postMessage({ type: 'resize', height: h }, '*');
+    }
+  }
+  window.addEventListener('load', report);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(report);
+  if (window.ResizeObserver && document.body) new ResizeObserver(report).observe(document.body);
+})();
+</script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 500px; height: 420px; overflow: hidden;
+      background: #f5f7fa;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    canvas { display: block; }
+    #ui {
+      width: 500px; height: 52px; padding: 0 10px;
+      font-size: 12px; color: #334455;
+      display: flex; align-items: center; gap: 10px;
+    }
+    button {
+      font-family: inherit; font-size: 12px; padding: 3px 10px;
+      border: 1px solid #b8c4d4; border-radius: 4px;
+      background: #ffffff; color: #334455; cursor: pointer;
+    }
+    button:hover { background: #eef3f9; }
+    label { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+    input[type=range] { vertical-align: middle; }
+  </style>
+</head>
+<body>
+  <canvas id="c" width="500" height="368"></canvas>
+  <div id="ui">
+    <button id="playBtn">&#10074;&#10074;</button>
+    <button id="resetBtn">&#8634;</button>
+    <label>Period
+      <input type="range" id="period" min="1" max="6" step="0.1" value="3" style="width:150px">
+    </label>
+    <span id="periodVal" style="min-width:60px">T = 3.0 s</span>
+  </div>
+  <script>
+  (() => {
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    const W = 500, H = 368;
+
+    const Q = new URLSearchParams(location.search);
+
+    // ── Circuit geometry ─────────────────────────────────────
+    // Triangle-ish closed loop: capacitor (parallel plates) at top right,
+    // inductor (coil) on the bottom leg. No source.
+    const PLATE = { lx: 346, rx: 370, w: 6, cy: 85, h: 84 };  // plate centers
+    // Conductor path from the left plate, the long way around, to the right plate.
+    const PATH_PTS = [
+      [PLATE.lx - PLATE.w / 2, 85],   // back face of left plate
+      [330, 85],
+      [80, 200],                      // left vertex
+      [415, 345],                     // bottom-right vertex (coil mid-leg)
+      [415, 85],                      // top-right vertex
+      [PLATE.rx + PLATE.w / 2, 85],   // back face of right plate
+    ];
+    // Arc-length table for the path
+    const segs = [];
+    let PATH_LEN = 0;
+    for (let i = 0; i < PATH_PTS.length - 1; i++) {
+      const [x0, y0] = PATH_PTS[i], [x1, y1] = PATH_PTS[i + 1];
+      const len = Math.hypot(x1 - x0, y1 - y0);
+      segs.push({ x0, y0, x1, y1, len, s0: PATH_LEN });
+      PATH_LEN += len;
+    }
+    function pathPoint(s) {
+      s = Math.max(0, Math.min(PATH_LEN, s));
+      for (const sg of segs) {
+        if (s <= sg.s0 + sg.len + 1e-9) {
+          const u = (s - sg.s0) / sg.len;
+          return [sg.x0 + (sg.x1 - sg.x0) * u, sg.y0 + (sg.y1 - sg.y0) * u];
+        }
+      }
+      return [PATH_PTS[PATH_PTS.length - 1][0], PATH_PTS[PATH_PTS.length - 1][1]];
+    }
+
+    // Coil placement: centered on the bottom leg (left vertex -> bottom right)
+    const COIL = (() => {
+      const x0 = 80, y0 = 200, x1 = 415, y1 = 345;
+      const ang = Math.atan2(y1 - y0, x1 - x0);
+      return { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, ang, len: 120, rad: 24, turns: 11 };
+    })();
+
+    // ── State ────────────────────────────────────────────────
+    // Q(t) = Q0 cos(wt) on the capacitor, I(t) = I0 sin(wt) in the wire.
+    let period = Math.max(1, Math.min(6, parseFloat(Q.get('period')) || 3.0));
+    let phase = 0;                  // w*t, kept continuous across period changes
+    let playing = Q.get('paused') === '1' ? false : true;
+
+    const DOT_SPACING = 27;
+    const DOT_SLOSH = 54;           // total charge displacement over a half period (px)
+    const DOT_R = 5.5;
+
+    // ── Drawing ──────────────────────────────────────────────
+    function drawWires() {
+      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      ctx.strokeStyle = '#8a5a36'; ctx.lineWidth = 9;
+      ctx.beginPath();
+      ctx.moveTo(PATH_PTS[0][0], PATH_PTS[0][1]);
+      for (let i = 1; i < PATH_PTS.length; i++) ctx.lineTo(PATH_PTS[i][0], PATH_PTS[i][1]);
+      ctx.stroke();
+      ctx.strokeStyle = '#c98a5e'; ctx.lineWidth = 6;
+      ctx.stroke();
+    }
+
+    function drawDots(ph) {
+      const shift = DOT_SLOSH * (1 - Math.cos(ph)) / 2;
+      ctx.save();
+      for (let s0 = -DOT_SLOSH - 10; s0 <= PATH_LEN + 10; s0 += DOT_SPACING) {
+        const s = s0 + shift;
+        if (s < -1 || s > PATH_LEN + 1) continue;
+        // fade into the plates near the path ends
+        const edge = Math.min(s, PATH_LEN - s);
+        const alpha = Math.max(0, Math.min(1, (edge + 4) / 12));
+        if (alpha <= 0) continue;
+        const [x, y] = pathPoint(s);
+        ctx.globalAlpha = alpha;
+        ctx.beginPath(); ctx.arc(x, y, DOT_R, 0, Math.PI * 2);
+        ctx.fillStyle = '#2f9de0'; ctx.fill();
+        ctx.strokeStyle = '#1a5d8a'; ctx.lineWidth = 1.2; ctx.stroke();
+        ctx.beginPath(); ctx.arc(x - 1.6, y - 1.8, 1.7, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,255,255,0.75)'; ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    function drawCoil() {
+      const { cx, cy, ang, len, rad, turns } = COIL;
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(ang);
+      // cylinder body
+      ctx.fillStyle = '#f4f1ea';
+      ctx.strokeStyle = '#9a917f'; ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.rect(-len / 2, -rad, len, rad * 2);
+      ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.ellipse(-len / 2, 0, 7, rad, 0, 0, Math.PI * 2);
+      ctx.fillStyle = '#e7e2d6'; ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.ellipse(len / 2, 0, 7, rad, 0, 0, Math.PI * 2);
+      ctx.fillStyle = '#e7e2d6'; ctx.fill(); ctx.stroke();
+      // windings
+      const span = len - 26;
+      for (let i = 0; i < turns; i++) {
+        const x = -span / 2 + (span / (turns - 1)) * i;
+        ctx.beginPath();
+        ctx.moveTo(x - 3, rad - 1.5);
+        ctx.lineTo(x + 3, -rad + 1.5);
+        ctx.strokeStyle = '#b06a3a'; ctx.lineWidth = 4.4; ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(x - 3 + 1.2, rad - 1.5);
+        ctx.lineTo(x + 3 + 1.2, -rad + 1.5);
+        ctx.strokeStyle = 'rgba(255,225,190,0.55)'; ctx.lineWidth = 1.2; ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    function drawChargeSigns(x, n, sign, color) {
+      ctx.fillStyle = color;
+      ctx.font = 'bold 13px Segoe UI'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      const span = PLATE.h - 18;
+      for (let i = 0; i < n; i++) {
+        const y = PLATE.cy - span / 2 + (n === 1 ? span / 2 : span * i / (n - 1));
+        ctx.fillText(sign, x, y);
+      }
+      ctx.textBaseline = 'alphabetic';
+    }
+
+    function drawCapacitor(q) {     // q in [-1, 1]: left-plate charge / Q0
+      const { lx, rx, w, cy, h } = PLATE;
+      for (const [px, plateQ] of [[lx, q], [rx, -q]]) {
+        // bare plate
+        ctx.fillStyle = '#aab4c2';
+        ctx.strokeStyle = '#5d6878'; ctx.lineWidth = 1.2;
+        ctx.fillRect(px - w / 2, cy - h / 2, w, h);
+        // charge fill bar, growing from the middle outward
+        const fh = h * Math.abs(plateQ);
+        if (fh > 1) {
+          ctx.fillStyle = plateQ > 0 ? '#e0563a' : '#3a6fe0';
+          ctx.fillRect(px - w / 2, cy - fh / 2, w, fh);
+        }
+        ctx.strokeRect(px - w / 2, cy - h / 2, w, h);
+      }
+      const n = Math.round(5 * Math.abs(q));
+      if (n > 0) {
+        drawChargeSigns(lx - 12, n, q > 0 ? '+' : '−', q > 0 ? '#c23a20' : '#2a55c2');
+        drawChargeSigns(rx + 12, n, q > 0 ? '−' : '+', q > 0 ? '#2a55c2' : '#c23a20');
+      }
+    }
+
+    function drawEnergyBars(ph) {
+      const eC = Math.cos(ph) ** 2, eL = Math.sin(ph) ** 2;
+      const bx = 26, base = 120, maxH = 72, bw = 16, gap = 14;
+      ctx.fillStyle = '#8090a4'; ctx.font = '11px Segoe UI'; ctx.textAlign = 'left';
+      ctx.fillText('energy', bx - 4, base - maxH - 10);
+      for (const [i, [val, col, lab]] of
+           [[eC, '#f29f3f', 'C'], [eL, '#5b8ff2', 'L']].entries()) {
+        const x = bx + i * (bw + gap);
+        ctx.fillStyle = 'rgba(0,0,0,0.07)';
+        ctx.fillRect(x, base - maxH, bw, maxH);
+        ctx.fillStyle = col;
+        ctx.fillRect(x, base - maxH * val, bw, maxH * val);
+        ctx.strokeStyle = 'rgba(0,0,0,0.18)'; ctx.lineWidth = 1;
+        ctx.strokeRect(x, base - maxH, bw, maxH);
+        ctx.fillStyle = '#62708a'; ctx.font = 'bold 11px Segoe UI'; ctx.textAlign = 'center';
+        ctx.fillText(lab, x + bw / 2, base + 13);
+        ctx.textAlign = 'left';
+      }
+    }
+
+    function draw() {
+      ctx.fillStyle = '#dceaf8';
+      ctx.fillRect(0, 0, W, H);
+      drawWires();
+      drawDots(phase);
+      drawCoil();
+      drawCapacitor(Math.cos(phase));
+      drawEnergyBars(phase);
+    }
+
+    // ── Animation loop ───────────────────────────────────────
+    let lastTs = null;
+    function frame(ts) {
+      if (lastTs === null) lastTs = ts;
+      const dt = Math.min((ts - lastTs) / 1000, 0.05);
+      lastTs = ts;
+      if (playing) phase += (2 * Math.PI / period) * dt;
+      draw();
+      requestAnimationFrame(frame);
+    }
+
+    // ── Controls ─────────────────────────────────────────────
+    const playBtn = document.getElementById('playBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const periodSl = document.getElementById('period');
+    const periodVal = document.getElementById('periodVal');
+
+    function updatePlayBtn() {
+      playBtn.innerHTML = playing ? '&#10074;&#10074;' : '&#9654;';
+    }
+    playBtn.addEventListener('click', () => { playing = !playing; updatePlayBtn(); });
+    resetBtn.addEventListener('click', () => { phase = 0; });
+    periodSl.addEventListener('input', () => {
+      period = parseFloat(periodSl.value);
+      periodVal.textContent = 'T = ' + period.toFixed(1) + ' s';
+    });
+
+    periodSl.value = period;
+    periodVal.textContent = 'T = ' + period.toFixed(1) + ' s';
+    updatePlayBtn();
+    requestAnimationFrame(frame);
+  })();
+  </script>
+</body>
+</html>

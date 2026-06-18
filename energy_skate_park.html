@@ -1,0 +1,1142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Skate Park</title>
+  <!-- Original AoPS interactive. Replaces the third-party "Energy Skate Park" simulation. -->
+  <!--
+    CALIBRATION (acceptance tests — see analysis/build_notes/energy_skate_park.md):
+      * W Track, g=9.8, frictionless, start at the 4.6 m standard start (red dot on the
+        middle of the 2nd centerline dash): full back-and-forth lap = 5.30 s (graded 5.2-5.4).
+      * v^2 vs height y on any frictionless track from y0=4.6: v^2 = 90.16 - 19.6*y
+        (intercept "90", slope -2g, reaches v^2=0 at y=4.6). At g=13.3: intercept 122.4.
+      * Steps scene (?track=steps, g=10, stick off, 60 kg): ramp-1 drop 0.925 m ->
+        launch 4.30 m/s (KE label 555 J); frictionless far-edge-of-ramp-2 speed 2.20 m/s
+        (KE label 145 J); friction 0.0089 -> launch 3.70 m/s (KE 411 J ~ remove 410 J)
+        and the skater stops at the very edge of ramp 2.
+      * Kitty Hills: 8 control points, exactly 3 stable equilibrium points.
+    Run ?selftest=1 and open the console to re-verify all of the above in-place.
+  -->
+<script>
+// EigenNode auto-height v2.4
+(function() {
+  // 4px buffer for subpixel rounding + parent's >=3px noise threshold.
+  // Extra 18px when horizontal overflow forces a scrollbar (eats vertical
+  // space inside the iframe — AoPS classroom embeds in a narrower column
+  // than the 600px content, so a horizontal scrollbar appears and steals
+  // ~10-17px of height). Without this, the iframe ends up ~11-15px short.
+  var BUFFER = 4;
+  var H_SCROLLBAR = 18;
+  var measuring = false;
+  function measure() {
+    if (measuring) return 0;
+    var b = document.body, h = document.documentElement;
+    if (!b) return 0;
+    measuring = true;
+    // Temporarily neutralise body's height/min-height (overriding stylesheet
+    // rules with !important) so scrollHeight reflects actual content extent.
+    // Without this, patterns like body { height: 100vh } cause scrollHeight
+    // to echo the iframe's current viewport — adding BUFFER each cycle
+    // ratchets the iframe taller forever. Browser doesn't paint until this
+    // synchronous block returns, so no visible flicker.
+    var hOld = b.style.height, hPri = b.style.getPropertyPriority('height');
+    var mOld = b.style.minHeight, mPri = b.style.getPropertyPriority('min-height');
+    b.style.setProperty('height', 'auto', 'important');
+    b.style.setProperty('min-height', '0', 'important');
+    var content = b.scrollHeight || 0;
+    if (hOld) b.style.setProperty('height', hOld, hPri); else b.style.removeProperty('height');
+    if (mOld) b.style.setProperty('min-height', mOld, mPri); else b.style.removeProperty('min-height');
+    measuring = false;
+    // Check the documentElement only — that's the element that owns the
+    // iframe's horizontal scrollbar. Body can be narrower than the iframe
+    // (e.g. body{width:600px} centered in a 700px iframe) and have its own
+    // 1-2px overflow that doesn't actually trigger a scrollbar.
+    var hOverflow = h && (h.scrollWidth - h.clientWidth) >= 4;
+    return Math.ceil(content) + BUFFER + (hOverflow ? H_SCROLLBAR : 0);
+  }
+  var last = 0;
+  function report() {
+    var h = measure();
+    if (h > 0 && Math.abs(h - last) >= 2) {
+      last = h;
+      window.parent.postMessage({ type: 'resize', height: h }, '*');
+    }
+  }
+  window.addEventListener('load', report);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(report);
+  if (window.ResizeObserver && document.body) new ResizeObserver(report).observe(document.body);
+})();
+</script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 800px; height: 500px; overflow: hidden;
+      background: #eef2f6; display: flex;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      user-select: none; -webkit-user-select: none;
+    }
+    body.clean { width: 600px; }
+    body.clean #panel { display: none; }
+    /* Locked MCH04 classroom preset: loads pre-configured (W track, standard
+       start, speedometer on) with the setup/extra options hidden, leaving only
+       the tools the energy experiment uses (speedometer, tape, stopwatch,
+       gravity, restart). Keeps everyone on the same page with zero setup. */
+    body.mch04 #trackLbl, body.mch04 #trackBtns, body.mch04 #buildRow,
+    body.mch04 #fricRow, body.mch04 #massrow, body.mch04 #btnReset,
+    body.mch04 #lblBars, body.mch04 #lblGrid, body.mch04 #lblRef,
+    body.mch04 #lblStick { display: none !important; }
+    canvas { display: block; flex: 0 0 600px; }
+    #panel {
+      flex: 1 1 auto; width: 200px; height: 500px; padding: 7px 9px 5px;
+      background: #f3f6f9; border-left: 1px solid #d4dde5;
+      font-size: 11.5px; color: #2c3e50; overflow: hidden;
+    }
+    #panel h1 { font-size: 15px; color: #1d3557; margin-bottom: 4px; font-weight: 600; }
+    .seclbl { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+              color: #7d8fa0; margin: 5px 0 2px; }
+    #trackBtns { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; }
+    #trackBtns button, #buildRow button, .act {
+      font: 11px 'Segoe UI', system-ui, sans-serif; padding: 3px 2px;
+      background: #fff; color: #2c3e50; border: 1px solid #b8c6d2;
+      border-radius: 4px; cursor: pointer;
+    }
+    #trackBtns button:hover, #buildRow button:hover, .act:hover { background: #e8f1f8; }
+    #trackBtns button.on { background: #2f6fb3; color: #fff; border-color: #2f6fb3; }
+    #buildRow { display: none; gap: 3px; margin-top: 3px; }
+    #buildRow button { flex: 1; }
+    label.cb { display: block; line-height: 17px; cursor: pointer; }
+    label.cb input { vertical-align: -2px; margin-right: 4px; }
+    .slrow { margin-top: 3px; }
+    .slrow .vals { float: right; color: #1d3557; font-weight: 600; }
+    input[type=range] { width: 100%; height: 18px; cursor: pointer; }
+    .gbtns { display: flex; gap: 3px; }
+    .gbtns button { flex: 1; font-size: 10px; padding: 2px 0; }
+    #massrow { color: #5d6f80; margin-top: 4px; }
+    .bigbtns { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+    .bigbtns button { padding: 4px 0; font-size: 11.5px; }
+  </style>
+</head>
+<body>
+<canvas id="c" width="600" height="500"></canvas>
+<div id="panel">
+  <h1>Skate Park</h1>
+  <div class="seclbl" id="trackLbl">Track</div>
+  <div id="trackBtns">
+    <button data-t="u">U Valley</button><button data-t="w">W Track</button>
+    <button data-t="ramp">Ramp</button><button data-t="steps">Steps</button>
+    <button data-t="kitty">Kitty Hills</button><button data-t="build">Build</button>
+  </div>
+  <div id="buildRow"><button id="addPt">+ point</button><button id="delPt">&minus; point</button></div>
+  <div class="seclbl">Tools</div>
+  <label class="cb" id="lblBars"><input type="checkbox" id="cbBars" checked> Energy bar chart</label>
+  <label class="cb"><input type="checkbox" id="cbSpeed"> Speedometer</label>
+  <label class="cb" id="lblGrid"><input type="checkbox" id="cbGrid"> Grid</label>
+  <label class="cb" id="lblRef"><input type="checkbox" id="cbRef"> Reference height</label>
+  <label class="cb"><input type="checkbox" id="cbTape"> Measuring tape</label>
+  <label class="cb"><input type="checkbox" id="cbWatch"> Stopwatch</label>
+  <label class="cb" id="lblStick"><input type="checkbox" id="cbStick" checked> Stick to track</label>
+  <div class="slrow"><span>Gravity</span><span class="vals"><span id="gVal">9.8</span> m/s&sup2;</span>
+    <input type="range" id="slG" min="1" max="25" step="0.1" value="9.8">
+    <div class="gbtns"><button id="gMoon">Moon 1.6</button><button id="gEarth">Earth 9.8</button><button id="gJup">Jupiter 24.8</button></div>
+  </div>
+  <div class="slrow" id="fricRow"><span>Friction</span><span class="vals" id="fVal">0.000</span>
+    <input type="range" id="slF" min="0" max="0.1" step="0.0005" value="0">
+  </div>
+  <div id="massrow">Mass: 60 kg (fixed)</div>
+  <div class="bigbtns">
+    <button class="act" id="btnRestart">&#8635; Restart skater</button>
+    <button class="act" id="btnReset">&#8634; Reset all</button>
+  </div>
+</div>
+<script>
+(() => {
+'use strict';
+
+// ==ESP-PHYSICS-CORE-BEGIN==
+// Pure physics: no DOM. This exact block is shared by the sim and the
+// offline calibration harness (extracted by marker comments and run in Node).
+var MASS = 60;              // kg, fixed (matches MCH05 energy numbers)
+var FRICTION_SCALE = 30;    // slider f in [0,0.1] -> damping b = f*FRICTION_SCALE (1/s)
+var SUBDT = 1 / 240;        // physics substep, s
+
+// --- Centripetal Catmull-Rom sampling --------------------------------------
+function catmullSample(ptsIn, perSeg) {
+  perSeg = perSeg || 70;
+  // drop consecutive duplicates
+  var pts = [];
+  for (var i = 0; i < ptsIn.length; i++) {
+    var p = ptsIn[i];
+    if (!pts.length || Math.hypot(p[0] - pts[pts.length - 1][0], p[1] - pts[pts.length - 1][1]) > 1e-6)
+      pts.push([p[0], p[1]]);
+  }
+  if (pts.length < 2) pts.push([pts[0][0] + 1, pts[0][1]]);
+  // pad ends by reflection so the spline passes through the end points
+  var P = pts.slice();
+  P.unshift([2 * pts[0][0] - pts[1][0], 2 * pts[0][1] - pts[1][1]]);
+  var n = pts.length;
+  P.push([2 * pts[n - 1][0] - pts[n - 2][0], 2 * pts[n - 1][1] - pts[n - 2][1]]);
+
+  var X = [], Y = [];
+  function knot(t, a, b) { return Math.pow(Math.hypot(b[0] - a[0], b[1] - a[1]), 0.5) + t; }
+  for (var seg = 0; seg + 3 < P.length; seg++) {
+    var p0 = P[seg], p1 = P[seg + 1], p2 = P[seg + 2], p3 = P[seg + 3];
+    var t0 = 0, t1 = knot(t0, p0, p1), t2 = knot(t1, p1, p2), t3 = knot(t2, p2, p3);
+    if (t2 - t1 < 1e-9) continue;
+    for (var j = (seg === 0 ? 0 : 1); j <= perSeg; j++) {
+      var t = t1 + (t2 - t1) * j / perSeg;
+      var A1x = lerp2(p0[0], p1[0], t0, t1, t), A1y = lerp2(p0[1], p1[1], t0, t1, t);
+      var A2x = lerp2(p1[0], p2[0], t1, t2, t), A2y = lerp2(p1[1], p2[1], t1, t2, t);
+      var A3x = lerp2(p2[0], p3[0], t2, t3, t), A3y = lerp2(p2[1], p3[1], t2, t3, t);
+      var B1x = lerp2(A1x, A2x, t0, t2, t), B1y = lerp2(A1y, A2y, t0, t2, t);
+      var B2x = lerp2(A2x, A3x, t1, t3, t), B2y = lerp2(A2y, A3y, t1, t3, t);
+      X.push(lerp2(B1x, B2x, t1, t2, t)); Y.push(lerp2(B1y, B2y, t1, t2, t));
+    }
+  }
+  function lerp2(a, b, ta, tb, t) { return a + (b - a) * (t - ta) / (tb - ta); }
+  // arc-length table + tangents + signed curvature
+  var m = X.length, S = [0], TX = [], TY = [], K = [];
+  for (i = 1; i < m; i++) S[i] = S[i - 1] + Math.hypot(X[i] - X[i - 1], Y[i] - Y[i - 1]);
+  for (i = 0; i < m; i++) {
+    var i0 = Math.max(0, i - 1), i1 = Math.min(m - 1, i + 1);
+    var dx = X[i1] - X[i0], dy = Y[i1] - Y[i0], L = Math.hypot(dx, dy) || 1e-9;
+    TX[i] = dx / L; TY[i] = dy / L;
+  }
+  for (i = 0; i < m; i++) {
+    i0 = Math.max(0, i - 1); i1 = Math.min(m - 1, i + 1);
+    var ds = S[i1] - S[i0] || 1e-9;
+    var cr = TX[i0] * TY[i1] - TY[i0] * TX[i1];
+    var dt = TX[i0] * TX[i1] + TY[i0] * TY[i1];
+    K[i] = Math.atan2(cr, dt) / ds;
+  }
+  return { pts: pts, X: X, Y: Y, S: S, TX: TX, TY: TY, K: K, n: m, total: S[m - 1] };
+}
+
+function trackQuery(tr, s) {
+  var S = tr.S, n = tr.n;
+  if (s <= 0) s = 0; if (s >= tr.total) s = tr.total;
+  var lo = 0, hi = n - 1, mid;
+  while (hi - lo > 1) { mid = (lo + hi) >> 1; if (S[mid] > s) hi = mid; else lo = mid; }
+  var f = (s - S[lo]) / ((S[hi] - S[lo]) || 1e-9);
+  var tx = tr.TX[lo] + (tr.TX[hi] - tr.TX[lo]) * f;
+  var ty = tr.TY[lo] + (tr.TY[hi] - tr.TY[lo]) * f;
+  var L = Math.hypot(tx, ty) || 1e-9;
+  return {
+    x: tr.X[lo] + (tr.X[hi] - tr.X[lo]) * f,
+    y: tr.Y[lo] + (tr.Y[hi] - tr.Y[lo]) * f,
+    tx: tx / L, ty: ty / L,
+    k: tr.K[lo] + (tr.K[hi] - tr.K[lo]) * f
+  };
+}
+
+function closestOnTrack(tr, px, py) {
+  var best = -1, bd = Infinity, stride = Math.max(1, Math.floor(tr.n / 260));
+  for (var i = 0; i < tr.n; i += stride) {
+    var d = (tr.X[i] - px) * (tr.X[i] - px) + (tr.Y[i] - py) * (tr.Y[i] - py);
+    if (d < bd) { bd = d; best = i; }
+  }
+  var lo = Math.max(0, best - stride), hi = Math.min(tr.n - 1, best + stride);
+  for (i = lo; i <= hi; i++) {
+    d = (tr.X[i] - px) * (tr.X[i] - px) + (tr.Y[i] - py) * (tr.Y[i] - py);
+    if (d < bd) { bd = d; best = i; }
+  }
+  return { s: tr.S[best], dist: Math.sqrt(bd), idx: best };
+}
+
+// --- Skater stepping ---------------------------------------------------------
+function newSkater() {
+  return { mode: 'air', s: 0, v: 0, x: 1.6, y: 0, vx: 0, vy: 0,
+           eth: 0, em0: 0, angle: 0, face: 1, airT: 0, prevD: 1 };
+}
+function placeOnTrack(st, tr, s, g) {
+  var q = trackQuery(tr, s);
+  st.mode = 'track'; st.s = s; st.v = 0; st.eth = 0;
+  st.em0 = g * q.y; st.x = q.x; st.y = q.y; st.angle = Math.atan2(q.ty, q.tx);
+}
+function placeInAir(st, x, y, g) {
+  st.mode = 'air'; st.x = x; st.y = y; st.vx = 0; st.vy = 0;
+  st.eth = 0; st.em0 = g * y; st.airT = 0; st.prevD = 1; st.angle = 0;
+}
+function detach(st, tr, g) {
+  var q = trackQuery(tr, st.s);
+  st.mode = 'air';
+  st.x = q.x - q.ty * 0.012; st.y = q.y + q.tx * 0.012;
+  st.vx = st.v * q.tx; st.vy = st.v * q.ty;
+  st.airT = 0; st.prevD = 1;
+}
+// One physics substep. Returns event string or null.
+function stepSkater(st, tr, dt, g, b, stick) {
+  if (st.mode === 'track') {
+    var s = st.s, v = st.v;
+    function f(s_, v_) { var q = trackQuery(tr, s_); return [v_, -g * q.ty - b * v_]; }
+    var k1 = f(s, v),
+        k2 = f(s + dt / 2 * k1[0], v + dt / 2 * k1[1]),
+        k3 = f(s + dt / 2 * k2[0], v + dt / 2 * k2[1]),
+        k4 = f(s + dt * k3[0], v + dt * k3[1]);
+    var sN = s + dt / 6 * (k1[0] + 2 * k2[0] + 2 * k3[0] + k4[0]);
+    var vN = v + dt / 6 * (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1]);
+    // thermal work this substep (Simpson over RK4 stage speeds)
+    var v2 = (k1[0] * k1[0] + 2 * k2[0] * k2[0] + 2 * k3[0] * k3[0] + k4[0] * k4[0]) / 6;
+    st.eth += b * v2 * dt;
+    if (sN < 0 || sN > tr.total) {           // rolled off a track end
+      st.s = Math.max(0, Math.min(tr.total, sN)); st.v = vN;
+      detach(st, tr, g);
+      return 'left-end';
+    }
+    // energy projection: kill integration drift exactly
+    var q = trackQuery(tr, sN);
+    var ke2 = 2 * (st.em0 - g * q.y - st.eth);
+    if (ke2 < 0) { ke2 = 0; }
+    var sg = vN > 0 ? 1 : (vN < 0 ? -1 : (v >= 0 ? 1 : -1));
+    st.s = sN; st.v = sg * Math.sqrt(ke2);
+    st.x = q.x; st.y = q.y; st.angle = Math.atan2(q.ty, q.tx);
+    if (Math.abs(st.v) > 0.02) st.face = (st.v * q.tx >= 0) ? 1 : -1;
+    if (!stick) {
+      var N = st.v * st.v * q.k + g * q.tx;   // normal force / mass on the +n side
+      if (N < -1e-9) { detach(st, tr, g); return 'detach'; }
+    }
+    return null;
+  }
+  if (st.mode === 'air') {
+    st.x += st.vx * dt;
+    st.y += st.vy * dt - 0.5 * g * dt * dt;
+    st.vy -= g * dt;
+    st.airT += dt;
+    if (Math.abs(st.vx) > 0.05) st.face = st.vx > 0 ? 1 : -1;
+    if (st.y <= 0 && st.vy < 0) {            // land on the ground
+      st.eth += 0.5 * st.vy * st.vy;
+      st.y = 0; st.mode = 'ground'; st.v = st.vx; st.angle = 0;
+      st.em0 = 0.5 * st.v * st.v + st.eth;
+      return 'land-ground';
+    }
+    if (st.airT > 0.04 && tr) {              // land on the track (from the +n side)
+      var c = closestOnTrack(tr, st.x, st.y);
+      var q2 = trackQuery(tr, c.s);
+      var d = (st.x - q2.x) * (-q2.ty) + (st.y - q2.y) * q2.tx;  // signed side
+      var vn = st.vx * (-q2.ty) + st.vy * q2.tx;
+      if (st.prevD > 0 && d <= 0 && c.dist < 0.6 && vn < 0 &&
+          c.s > 1e-6 && c.s < tr.total - 1e-6) {
+        var vt = st.vx * q2.tx + st.vy * q2.ty;
+        st.eth += 0.5 * vn * vn;             // inelastic impact -> thermal
+        st.mode = 'track'; st.s = c.s; st.v = vt;
+        st.em0 = 0.5 * vt * vt + g * q2.y + st.eth;
+        st.x = q2.x; st.y = q2.y; st.angle = Math.atan2(q2.ty, q2.tx);
+        return 'land-track';
+      }
+      st.prevD = d;
+    }
+    return null;
+  }
+  if (st.mode === 'ground') {
+    var vOld = st.v;
+    if (b > 0) {
+      st.v = vOld * Math.exp(-b * dt);
+      st.x += vOld * (1 - Math.exp(-b * dt)) / b;
+      st.eth += 0.5 * (vOld * vOld - st.v * st.v);
+    } else st.x += vOld * dt;
+    if (Math.abs(st.v) > 0.02) st.face = st.v > 0 ? 1 : -1;
+    return null;
+  }
+  return null;
+}
+
+// Full back-and-forth lap period from rest at s0 (time between successive
+// returns to zero speed at the start point). Used by calibration self-test.
+function lapTime(tr, s0, g) {
+  var st = newSkater(); placeOnTrack(st, tr, s0, g);
+  var t = 0, armed = false, crossings = 0, pv = 0;
+  for (var i = 0; i < 200000; i++) {
+    pv = st.v;
+    stepSkater(st, tr, SUBDT, g, 0, true);
+    t += SUBDT;
+    if (!armed) { if (Math.abs(st.v) > 0.5) armed = true; continue; }
+    if ((pv > 0 && st.v <= 0) || (pv < 0 && st.v >= 0)) {
+      crossings++;
+      if (crossings === 2) return t - SUBDT * Math.abs(st.v) / (Math.abs(pv) + Math.abs(st.v));
+      armed = false;
+    }
+    if (!armed && Math.abs(st.v) > 0.5) armed = true;
+  }
+  return NaN;
+}
+// arc position where track height first crosses yTarget going downhill
+function sAtHeight(tr, yTarget) {
+  for (var i = 1; i < tr.n; i++) {
+    if (tr.Y[i - 1] > yTarget && tr.Y[i] <= yTarget) {
+      var f = (tr.Y[i - 1] - yTarget) / (tr.Y[i - 1] - tr.Y[i]);
+      return tr.S[i - 1] + (tr.S[i] - tr.S[i - 1]) * f;
+    }
+  }
+  return -1;
+}
+// count interior local minima of track height (stable equilibrium points)
+function countStableEquilibria(tr, prominence) {
+  prominence = prominence || 0.02;
+  var mins = [], n = tr.n;
+  for (var i = 2; i < n - 2; i++) {
+    if (tr.Y[i] <= tr.Y[i - 1] && tr.Y[i] < tr.Y[i + 1]) {
+      // prominence check: must rise by `prominence` on both sides before a lower point
+      var ok = [false, false], dir, j, rise;
+      for (dir = 0; dir < 2; dir++) {
+        rise = 0;
+        for (j = i; j > 1 && j < n - 1; j += dir ? 1 : -1) {
+          rise = Math.max(rise, tr.Y[j] - tr.Y[i]);
+          if (tr.Y[j] < tr.Y[i] - 1e-9) break;
+          if (rise >= prominence) { ok[dir] = true; break; }
+        }
+      }
+      if (ok[0] && ok[1]) mins.push({ s: tr.S[i], x: tr.X[i], y: tr.Y[i] });
+    }
+  }
+  return mins;
+}
+if (typeof module !== 'undefined') module.exports = {
+  MASS: MASS, FRICTION_SCALE: FRICTION_SCALE, SUBDT: SUBDT,
+  catmullSample: catmullSample, trackQuery: trackQuery, closestOnTrack: closestOnTrack,
+  newSkater: newSkater, placeOnTrack: placeOnTrack, placeInAir: placeInAir,
+  stepSkater: stepSkater, lapTime: lapTime, sAtHeight: sAtHeight,
+  countStableEquilibria: countStableEquilibria
+};
+// ==ESP-PHYSICS-CORE-END==
+
+// --- Calibrated track presets (geometry tuned offline; see build notes) -----
+const DASH = 0.55;            // centerline dash length (m)
+const PRESETS = {
+  // W track: lap from the 4.6 m standard start = 5.30 s at g = 9.8.
+  // dashGap 0.3067 puts the center of dash #2 exactly at the standard start
+  // (2*gap + 1.5*dash = s* = 1.4384 m of arc from the left end).
+  w:     { pts: [[0.9, 6], [2.614, 0.12], [4.65, 1.809], [6.686, 0.12], [8.4, 6]],
+           std: { y: 4.6 }, dashGap: 0.3067 },
+  u:     { pts: [[1.1, 6.1], [2.6, 1.6], [4.9, 0.16], [7.2, 1.6], [8.7, 6.1]],
+           std: { y: 4.6 } },
+  // straight uniform slope (collinear control points), flat runout at ground
+  ramp:  { pts: [[0.7, 5.5], [3.9, 3.05], [7.1, 0.6], [8.1, 0.14], [10.0, 0.10]],
+           std: { y: 4.6 } },
+  // MCH05 stepped-ramps scene; tuned at g=10 with stick off (see file header)
+  steps: { pts: [[0.4, 4.65], [2.1, 4.178], [3.7, 3.733], [3.8, 3.705], [3.88, 3.285],
+                 [4.12, 3.07], [4.55, 2.77], [4.98, 2.77], [5.742, 2.918], [6.505, 3.066],
+                 [6.885, 3.14], [7.005, 2.64], [7.335, 1.82], [7.885, 1.42], [8.885, 1.54],
+                 [9.035, 1.04], [9.335, 0.12]],
+           std: { s: 0.001 }, defG: 10, defStick: false, autoStd: true },
+  // 8 control points, exactly 3 stable equilibria (valley, valley, high pocket)
+  kitty: { pts: [[0.4, 5.7], [1.4, 2.8], [2.5, 0.85], [4.0, 2.75], [5.3, 1.5],
+                 [6.5, 3.95], [7.4, 3.0], [8.4, 3.65]],
+           std: { s: 0.001 } },
+  build: { pts: [[1.2, 4.5], [3.4, 0.8], [5.8, 0.8], [8.2, 3.8]], editable: true }
+};
+
+// --- Canvas / world ----------------------------------------------------------
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+if (!ctx.roundRect) ctx.roundRect = function (x, y, w, h, r) {   // older-browser fallback
+  this.moveTo(x + r, y); this.arcTo(x + w, y, x + w, y + h, r);
+  this.arcTo(x + w, y + h, x, y + h, r); this.arcTo(x, y + h, x, y, r);
+  this.arcTo(x, y, x + w, y, r); this.closePath();
+};
+const CW = 600, CH = 500;
+const SCALE = 56, GROUND = 472;          // px per m; ground line py
+const w2x = x => x * SCALE, w2y = y => GROUND - y * SCALE;
+const x2w = px => px / SCALE, y2w = py => (GROUND - py) / SCALE;
+
+// --- URL parameters ----------------------------------------------------------
+const Q = new URLSearchParams(location.search);
+const qFlag = (k, dflt) => Q.has(k) ? Q.get(k) !== '0' : dflt;
+const qNum = (k, dflt) => Q.has(k) && isFinite(+Q.get(k)) ? +Q.get(k) : dflt;
+const CLEAN = qFlag('clean', false), HIDEHUD = qFlag('hidehud', false);
+const SHOWDOTS = qFlag('dots', false);
+if (CLEAN) document.body.classList.add('clean');
+// Locked classroom presets: a single ?lesson=… loads the sim fully set up and
+// hides the options that aren't part of that lesson, so a class needs no setup.
+const LESSON = Q.get('lesson') || '';
+if (LESSON === 'mch04') document.body.classList.add('mch04');
+
+// --- State ---------------------------------------------------------------
+let trackKey, pts, track, st, g, fric, stick, paused, slow, charType, lastDrop;
+let showBars, showSpeed, showGrid, showRef, showTape, showWatch;
+let refY = 0, placedOnce = false, selPt = 0;
+let watch = { x: 494, y: 388, run: false, t: 0 };
+let tape = { x1: 9.8, y1: 0, x2: 9.8, y2: 1.4 };
+let barScale = 800;       // J full-scale, smoothed
+let acc = 0, lastTs = null;
+
+function rebuild() { track = catmullSample(pts, 70); }
+function setTrack(key, init) {
+  trackKey = key;
+  const P = PRESETS[key];
+  pts = P.pts.map(p => [p[0], p[1]]);
+  rebuild();
+  selPt = pts.length - 1;
+  document.querySelectorAll('#trackBtns button').forEach(b =>
+    b.classList.toggle('on', b.dataset.t === key));
+  document.getElementById('buildRow').style.display = P.editable ? 'flex' : 'none';
+  if (!init) {
+    if (P.defG !== undefined) setG(P.defG);
+    if (P.defStick !== undefined) { stick = P.defStick; document.getElementById('cbStick').checked = stick; }
+    if (P.autoStd && P.std) placeStd(); else standOnGround(1.5);
+  }
+}
+function placeStd() {
+  const P = PRESETS[trackKey];
+  if (!P.std) { standOnGround(1.5); return; }
+  const s = P.std.s !== undefined ? P.std.s : sAtHeight(track, P.std.y);
+  placeOnTrack(st, track, Math.max(s, 0.001), g);
+  lastDrop = { kind: 'track', s: st.s };
+  placedOnce = true;
+}
+function standOnGround(x) {
+  st.mode = 'ground'; st.x = x; st.y = 0; st.v = 0; st.vx = 0; st.vy = 0;
+  st.eth = 0; st.em0 = 0; st.angle = 0;
+  lastDrop = { kind: 'ground', x: x };
+}
+function setG(val) {
+  g = Math.min(25, Math.max(1, val));
+  document.getElementById('slG').value = g;
+  document.getElementById('gVal').textContent = g.toFixed(1);
+  // keep speed, rebase energy datum
+  if (st) {
+    if (st.mode === 'track') st.em0 = 0.5 * st.v * st.v + g * st.y + st.eth;
+    else if (st.mode === 'ground') st.em0 = 0.5 * st.v * st.v + st.eth;
+  }
+}
+function setFric(val) {
+  fric = Math.min(0.1, Math.max(0, val));
+  document.getElementById('slF').value = fric;
+  document.getElementById('fVal').textContent = fric.toFixed(3);
+}
+function restartSkater() {
+  st.eth = 0;
+  if (!lastDrop) { standOnGround(1.5); return; }
+  if (lastDrop.kind === 'track') placeOnTrack(st, track, Math.min(lastDrop.s, track.total - 0.001), g);
+  else if (lastDrop.kind === 'air') placeInAir(st, lastDrop.x, lastDrop.y, g);
+  else standOnGround(lastDrop.x);
+}
+function initFromParams() {
+  st = newSkater();
+  charType = (Q.get('char') === 'cat') ? 'cat' : 'emilie';
+  const tk = PRESETS[Q.get('track')] ? Q.get('track') : (LESSON === 'mch04' ? 'w' : 'u');
+  setTrack(tk, true);
+  const P = PRESETS[tk];
+  g = 9.8; setG(qNum('g', P.defG !== undefined ? P.defG : 9.8));
+  setFric(qNum('friction', 0));
+  stick = qFlag('stick', P.defStick !== undefined ? P.defStick : true);
+  showBars = qFlag('bars', LESSON === 'mch04' ? false : true);
+  showSpeed = qFlag('speed', LESSON === 'mch04' ? true : false);
+  showGrid = qFlag('grid', false);
+  showTape = qFlag('tape', false);
+  showWatch = qFlag('watch', false);
+  slow = qFlag('slow', false);
+  paused = qFlag('paused', LESSON === 'mch04');   // MCH04 loads paused at the standard start
+  refY = qNum('ref', 0);
+  showRef = Q.has('ref');
+  watch = { x: 494, y: 388, run: false, t: 0 };
+  tape = { x1: 9.8, y1: 0, x2: 9.8, y2: 1.4 };
+  placedOnce = false;
+  barScale = 800;
+  const startQ = Q.get('start') || (LESSON === 'mch04' ? 'std' : null);
+  if (startQ === 'std') placeStd();
+  else if (startQ && startQ.indexOf(',') > 0) {
+    const [sx, sy] = startQ.split(',').map(Number);
+    if (isFinite(sx) && isFinite(sy)) { releaseSkaterAt(sx, sy); placedOnce = true; }
+    else standOnGround(1.5);
+  } else standOnGround(1.5);
+  for (const [id, val] of [['cbBars', showBars], ['cbSpeed', showSpeed], ['cbGrid', showGrid],
+       ['cbRef', showRef], ['cbTape', showTape], ['cbWatch', showWatch], ['cbStick', stick]])
+    document.getElementById(id).checked = val;
+}
+function releaseSkaterAt(wx, wy) {
+  wx = Math.min(10.6, Math.max(0.05, wx)); wy = Math.min(8.2, Math.max(0, wy));
+  const c = closestOnTrack(track, wx, wy);
+  if (c.dist < 0.45) {
+    placeOnTrack(st, track, Math.min(Math.max(c.s, 0.001), track.total - 0.001), g);
+    lastDrop = { kind: 'track', s: st.s };
+  } else if (wy < 0.06) {
+    standOnGround(wx);
+  } else {
+    placeInAir(st, wx, wy, g);
+    lastDrop = { kind: 'air', x: wx, y: wy };
+  }
+}
+
+// --- Energy ------------------------------------------------------------------
+function energies() {
+  let ke;
+  if (st.mode === 'air') ke = 0.5 * MASS * (st.vx * st.vx + st.vy * st.vy);
+  else if (st.mode === 'drag') ke = 0;
+  else ke = 0.5 * MASS * st.v * st.v;
+  const pe = MASS * g * (st.y - refY);
+  const th = MASS * st.eth;
+  return { ke, pe, th, tot: ke + pe + th };
+}
+
+// --- Drawing -----------------------------------------------------------------
+function draw() {
+  // sky
+  const sky = ctx.createLinearGradient(0, 0, 0, GROUND);
+  sky.addColorStop(0, '#a9d7f2'); sky.addColorStop(1, '#e6f5fd');
+  ctx.fillStyle = sky; ctx.fillRect(0, 0, CW, GROUND);
+
+  if (showGrid) drawGrid();
+  drawMountains();
+
+  // ground
+  ctx.fillStyle = '#8fbf6f'; ctx.fillRect(0, GROUND, CW, 12);
+  ctx.fillStyle = '#c29b6e'; ctx.fillRect(0, GROUND + 12, CW, CH - GROUND - 12);
+  ctx.strokeStyle = '#5a8f4d'; ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.moveTo(0, GROUND); ctx.lineTo(CW, GROUND); ctx.stroke();
+
+  if (showRef) drawRefLine();
+  drawTrack();
+  drawSkater();
+  if (showBars) drawBars();
+  if (showSpeed) drawDial();
+  if (showTape) drawTape();
+  if (showWatch) drawWatch();
+  if (!HIDEHUD) drawTransport();
+  drawHints();
+}
+
+function drawGrid() {
+  ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(60,90,120,0.18)';
+  for (let x = 0; x <= 10; x++) {
+    ctx.beginPath(); ctx.moveTo(w2x(x) + 0.5, 0); ctx.lineTo(w2x(x) + 0.5, GROUND); ctx.stroke();
+  }
+  for (let y = 0; y <= 8; y++) {
+    ctx.beginPath(); ctx.moveTo(0, w2y(y) + 0.5); ctx.lineTo(CW, w2y(y) + 0.5); ctx.stroke();
+  }
+  ctx.fillStyle = '#4d6a80'; ctx.font = '11px Segoe UI'; ctx.textAlign = 'left';
+  for (let y = 0; y <= 8; y += 2)
+    ctx.fillText(y === 0 ? '0 m' : String(y), 4, w2y(y) - 4);
+}
+
+function drawMountains() {
+  ctx.fillStyle = '#a8b39c';
+  ctx.beginPath();
+  ctx.moveTo(w2x(-0.1), GROUND);
+  ctx.lineTo(w2x(0.45), w2y(1.30)); ctx.lineTo(w2x(0.85), w2y(0.45));
+  ctx.lineTo(w2x(1.20), w2y(0.95)); ctx.lineTo(w2x(1.75), GROUND);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#f4f9f7';
+  ctx.beginPath(); ctx.moveTo(w2x(0.31), w2y(0.97)); ctx.lineTo(w2x(0.45), w2y(1.30));
+  ctx.lineTo(w2x(0.59), w2y(0.97)); ctx.lineTo(w2x(0.51), w2y(1.04));
+  ctx.lineTo(w2x(0.45), w2y(0.97)); ctx.lineTo(w2x(0.38), w2y(1.05)); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(w2x(1.10), w2y(0.78)); ctx.lineTo(w2x(1.20), w2y(0.95));
+  ctx.lineTo(w2x(1.30), w2y(0.78)); ctx.lineTo(w2x(1.20), w2y(0.83)); ctx.closePath(); ctx.fill();
+}
+
+function sIdx(tr, s) {
+  let lo = 0, hi = tr.n - 1, mid;
+  while (hi - lo > 1) { mid = (lo + hi) >> 1; if (tr.S[mid] > s) hi = mid; else lo = mid; }
+  return lo;
+}
+
+function drawTrack() {
+  // ribbon
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(w2x(track.X[0]), w2y(track.Y[0]));
+  for (let i = 1; i < track.n; i++) ctx.lineTo(w2x(track.X[i]), w2y(track.Y[i]));
+  ctx.strokeStyle = '#6e6e6e'; ctx.lineWidth = 11; ctx.stroke();
+  ctx.strokeStyle = '#a3a3a3'; ctx.lineWidth = 7.5; ctx.stroke();
+  // deterministic dashed centerline (the dashes are a measurement landmark)
+  const gap = PRESETS[trackKey].dashGap || 0.42, period = DASH + gap;
+  ctx.strokeStyle = '#3c3c3c'; ctx.lineWidth = 1.8;
+  for (let a = gap; a < track.total; a += period) {
+    const b = Math.min(a + DASH, track.total);
+    const qa = trackQuery(track, a), qb = trackQuery(track, b);
+    ctx.beginPath(); ctx.moveTo(w2x(qa.x), w2y(qa.y));
+    for (let i = sIdx(track, a) + 1; i < track.n && track.S[i] < b; i++)
+      ctx.lineTo(w2x(track.X[i]), w2y(track.Y[i]));
+    ctx.lineTo(w2x(qb.x), w2y(qb.y)); ctx.stroke();
+  }
+  // control points
+  if (PRESETS[trackKey].editable || SHOWDOTS) {
+    for (let i = 0; i < pts.length; i++) {
+      const px = w2x(pts[i][0]), py = w2y(pts[i][1]);
+      ctx.beginPath(); ctx.arc(px, py, 8, 0, 2 * Math.PI);
+      ctx.fillStyle = '#d62828'; ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = (PRESETS[trackKey].editable && i === selPt) ? '#ffd166' : '#ffffff';
+      ctx.stroke();
+      ctx.beginPath(); ctx.arc(px - 2.4, py - 2.6, 2.2, 0, 2 * Math.PI);
+      ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.fill();
+    }
+  }
+}
+
+function drawRefLine() {
+  const py = w2y(refY);
+  ctx.save(); ctx.setLineDash([8, 6]);
+  ctx.strokeStyle = '#0e7c7b'; ctx.lineWidth = 1.8;
+  ctx.beginPath(); ctx.moveTo(0, py); ctx.lineTo(CW, py); ctx.stroke();
+  ctx.setLineDash([]); ctx.restore();
+  // handle
+  ctx.beginPath();
+  ctx.moveTo(206, py - 9); ctx.lineTo(218, py); ctx.lineTo(206, py + 9); ctx.lineTo(194, py);
+  ctx.closePath();
+  ctx.fillStyle = '#0e7c7b'; ctx.fill();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.fillStyle = '#0e7c7b'; ctx.font = '11px Segoe UI'; ctx.textAlign = 'left';
+  ctx.fillText('reference height ' + refY.toFixed(2) + ' m', 228, py - 5);
+}
+
+function drawSkaterFigure(px, py, ang, face, ghost) {
+  ctx.save();
+  ctx.translate(px, py); ctx.rotate(-ang); ctx.scale(face, 1);
+  if (ghost) ctx.globalAlpha = 0.5;
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  // wheels + deck
+  ctx.fillStyle = '#2e2e2e';
+  ctx.beginPath(); ctx.arc(-10, 2, 3.2, 0, 2 * Math.PI); ctx.fill();
+  ctx.beginPath(); ctx.arc(10, 2, 3.2, 0, 2 * Math.PI); ctx.fill();
+  ctx.strokeStyle = '#4a3826'; ctx.lineWidth = 3.6;
+  ctx.beginPath(); ctx.moveTo(-15, -3); ctx.quadraticCurveTo(0, -1.4, 15, -3); ctx.stroke();
+  if (charType === 'cat') {
+    // tail
+    ctx.strokeStyle = '#7a6a58'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(-10, -13); ctx.quadraticCurveTo(-19, -18, -17, -28); ctx.stroke();
+    // hind + front legs
+    ctx.strokeStyle = '#857463'; ctx.lineWidth = 3.6;
+    ctx.beginPath(); ctx.moveTo(-7, -12); ctx.lineTo(-8, -4); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(7, -13); ctx.lineTo(9, -4); ctx.stroke();
+    // body
+    ctx.fillStyle = '#8d7b6a';
+    ctx.beginPath(); ctx.ellipse(-1, -14, 11.5, 6.5, -0.18, 0, 2 * Math.PI); ctx.fill();
+    // head
+    ctx.beginPath(); ctx.arc(10, -22, 6.2, 0, 2 * Math.PI); ctx.fill();
+    // ears
+    ctx.beginPath(); ctx.moveTo(5.5, -26); ctx.lineTo(7, -32.5); ctx.lineTo(10, -27.5); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(11, -27.5); ctx.lineTo(14.5, -31.5); ctx.lineTo(15, -25.5); ctx.closePath(); ctx.fill();
+    // face
+    ctx.fillStyle = '#332a22';
+    ctx.beginPath(); ctx.arc(12.5, -23, 1.1, 0, 2 * Math.PI); ctx.fill();
+    ctx.strokeStyle = '#332a22'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(15.5, -21); ctx.lineTo(19, -22); ctx.moveTo(15.5, -20); ctx.lineTo(19, -19.5); ctx.stroke();
+    // stripes
+    ctx.strokeStyle = '#76654f'; ctx.lineWidth = 1.6;
+    ctx.beginPath(); ctx.moveTo(-6, -19.5); ctx.lineTo(-4.4, -14); ctx.moveTo(-2, -20.2); ctx.lineTo(-0.6, -14.6); ctx.stroke();
+  } else {
+    // Emilie: stick-figure skater with helmet and ponytail (original art)
+    ctx.strokeStyle = '#51608f'; ctx.lineWidth = 4.6;       // legs (jeans)
+    ctx.beginPath(); ctx.moveTo(-7, -5); ctx.lineTo(-5.4, -13); ctx.lineTo(0, -18.5); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(7, -5); ctx.lineTo(7.6, -13); ctx.lineTo(1.5, -18.5); ctx.stroke();
+    ctx.strokeStyle = '#2a9d8f'; ctx.lineWidth = 5.6;       // torso (teal top)
+    ctx.beginPath(); ctx.moveTo(0.5, -18.5); ctx.lineTo(2.2, -31.5); ctx.stroke();
+    ctx.lineWidth = 3.4;                                    // arms
+    ctx.beginPath(); ctx.moveTo(1.6, -29.5); ctx.lineTo(-9.5, -35.5); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(1.6, -29.5); ctx.lineTo(12.5, -25.5); ctx.stroke();
+    ctx.fillStyle = '#f1c08e';                              // hands
+    ctx.beginPath(); ctx.arc(-10.6, -36.1, 2, 0, 2 * Math.PI); ctx.fill();
+    ctx.beginPath(); ctx.arc(13.6, -25.1, 2, 0, 2 * Math.PI); ctx.fill();
+    // ponytail
+    ctx.strokeStyle = '#6b4a2f'; ctx.lineWidth = 3.4;
+    ctx.beginPath(); ctx.moveTo(0.6, -40.5); ctx.quadraticCurveTo(-5.5, -39, -7, -32.5); ctx.stroke();
+    // head + helmet
+    ctx.fillStyle = '#f1c08e';
+    ctx.beginPath(); ctx.arc(4, -38.5, 6, 0, 2 * Math.PI); ctx.fill();
+    ctx.fillStyle = '#f4a23a';
+    ctx.beginPath(); ctx.arc(4, -39.6, 6.8, Math.PI * 0.97, Math.PI * 2.03); ctx.fill();
+    ctx.strokeStyle = '#d98a1f'; ctx.lineWidth = 1.4;
+    ctx.beginPath(); ctx.moveTo(-2.8, -39.4); ctx.lineTo(10.9, -39.4); ctx.stroke();
+    ctx.fillStyle = '#2e2e2e';                              // eye
+    ctx.beginPath(); ctx.arc(7.2, -38.4, 1, 0, 2 * Math.PI); ctx.fill();
+  }
+  // red reference dot at board level (start-placement landmark)
+  ctx.beginPath(); ctx.arc(0, 0, 3.6, 0, 2 * Math.PI);
+  ctx.fillStyle = '#e63329'; ctx.fill();
+  ctx.lineWidth = 1.2; ctx.strokeStyle = '#7a1410'; ctx.stroke();
+  ctx.restore();
+}
+
+function drawSkater() {
+  if (st.mode === 'drag') {
+    const c = closestOnTrack(track, st.x, st.y);
+    if (c.dist < 0.45) {     // snap preview
+      const q = trackQuery(track, c.s);
+      ctx.beginPath(); ctx.arc(w2x(q.x), w2y(q.y), 5.5, 0, 2 * Math.PI);
+      ctx.fillStyle = 'rgba(230,51,41,0.45)'; ctx.fill();
+    }
+    drawSkaterFigure(w2x(st.x), w2y(st.y), 0, st.face, true);
+    return;
+  }
+  drawSkaterFigure(w2x(st.x), w2y(st.y), st.angle, st.face, false);
+}
+
+const BARS_X = 6, BARS_Y = 6, BARS_W = 150, BARS_H = 192, BARS_ZERO = BARS_Y + 140;
+function drawBars() {
+  const e = energies();
+  // smooth full-scale: track the run's total mechanical energy
+  const target = Math.max(250, MASS * st.em0 * 1.12, e.tot * 1.12, e.ke * 1.12, Math.abs(e.pe) * 1.12);
+  barScale += (target - barScale) * 0.12;
+  const pxPerJ = 118 / barScale;
+  ctx.fillStyle = 'rgba(255,255,255,0.93)';
+  ctx.strokeStyle = '#b9c6d2'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.roundRect(BARS_X, BARS_Y, BARS_W, BARS_H, 6); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#1d3557'; ctx.font = 'bold 12px Segoe UI'; ctx.textAlign = 'center';
+  ctx.fillText('Energy (J)', BARS_X + BARS_W / 2, BARS_Y + 15);
+  // zero line
+  ctx.strokeStyle = '#8b9aa8';
+  ctx.beginPath(); ctx.moveTo(BARS_X + 8, BARS_ZERO + 0.5); ctx.lineTo(BARS_X + BARS_W - 8, BARS_ZERO + 0.5); ctx.stroke();
+  const items = [
+    ['Kinetic', e.ke, '#2eaa3e'], ['Potential', e.pe, '#2b6fd4'],
+    ['Thermal', e.th, '#d9542e'], ['Total', e.tot, '#e0b522']
+  ];
+  for (let i = 0; i < 4; i++) {
+    const [name, val, col] = items[i];
+    const bx = BARS_X + 16 + i * 33, bw = 22;
+    let hpx = val * pxPerJ;
+    hpx = Math.max(-44, Math.min(118, hpx));
+    ctx.fillStyle = col;
+    if (hpx >= 0) ctx.fillRect(bx, BARS_ZERO - hpx, bw, Math.max(hpx, 0.001));
+    else ctx.fillRect(bx, BARS_ZERO, bw, -hpx);
+    // numeric label
+    ctx.fillStyle = '#33454f'; ctx.font = '10px Segoe UI'; ctx.textAlign = 'center';
+    const ly = hpx >= 0 ? BARS_ZERO - hpx - 3 : BARS_ZERO - hpx + 10;
+    ctx.fillText(String(Math.round(val)), bx + bw / 2, Math.min(Math.max(ly, BARS_Y + 26), BARS_Y + BARS_H - 26));
+    // name (rotated)
+    ctx.save(); ctx.translate(bx + bw / 2 + 3, BARS_Y + BARS_H - 6); ctx.rotate(-Math.PI / 2);
+    ctx.fillStyle = '#5d6f80'; ctx.font = '9.5px Segoe UI'; ctx.textAlign = 'left';
+    ctx.fillText(name, 0, 3); ctx.restore();
+  }
+}
+
+function drawDial() {
+  const cx = 536, cy = 66, r = 44;
+  const spd = st.mode === 'air' ? Math.hypot(st.vx, st.vy) : (st.mode === 'drag' ? 0 : Math.abs(st.v));
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+  ctx.fillStyle = 'rgba(255,255,255,0.95)'; ctx.fill();
+  ctx.strokeStyle = '#b9c6d2'; ctx.lineWidth = 2; ctx.stroke();
+  ctx.fillStyle = '#1d3557'; ctx.font = 'bold 10.5px Segoe UI'; ctx.textAlign = 'center';
+  ctx.fillText('Speed', cx, cy - r + 16);
+  const a0 = Math.PI * 1.17, a1 = -Math.PI * 0.17, VMAX = 15;
+  for (let v = 0; v <= VMAX; v++) {
+    const a = a0 + (a1 - a0) * v / VMAX, major = v % 5 === 0;
+    const r1 = r - (major ? 10 : 6), r2 = r - 3;
+    ctx.strokeStyle = '#5d6f80'; ctx.lineWidth = major ? 1.6 : 1;
+    ctx.beginPath(); ctx.moveTo(cx + r1 * Math.cos(a), cy - r1 * Math.sin(a));
+    ctx.lineTo(cx + r2 * Math.cos(a), cy - r2 * Math.sin(a)); ctx.stroke();
+    if (major) {
+      ctx.fillStyle = '#33454f'; ctx.font = '9px Segoe UI';
+      ctx.fillText(String(v), cx + (r - 17) * Math.cos(a), cy - (r - 17) * Math.sin(a) + 3);
+    }
+  }
+  const av = a0 + (a1 - a0) * Math.min(spd, VMAX) / VMAX;
+  ctx.strokeStyle = '#d62828'; ctx.lineWidth = 2.4;
+  ctx.beginPath(); ctx.moveTo(cx - 6 * Math.cos(av), cy + 6 * Math.sin(av));
+  ctx.lineTo(cx + (r - 12) * Math.cos(av), cy - (r - 12) * Math.sin(av)); ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx, cy, 3, 0, 2 * Math.PI); ctx.fillStyle = '#1d3557'; ctx.fill();
+  // digital readout
+  ctx.fillStyle = 'rgba(255,255,255,0.95)'; ctx.strokeStyle = '#b9c6d2'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.roundRect(cx - 33, cy + r + 4, 66, 18, 4); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#1d3557'; ctx.font = 'bold 12px Segoe UI';
+  ctx.fillText(spd.toFixed(1) + ' m/s', cx, cy + r + 17);
+}
+
+function drawTape() {
+  const x1 = w2x(tape.x1), y1 = w2y(tape.y1), x2 = w2x(tape.x2), y2 = w2y(tape.y2);
+  const len = Math.hypot(tape.x2 - tape.x1, tape.y2 - tape.y1);
+  ctx.strokeStyle = '#c9a227'; ctx.lineWidth = 2.4;
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  // base body
+  ctx.fillStyle = '#e9c46a'; ctx.strokeStyle = '#9c7a18'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.roundRect(x1 - 9, y1 - 9, 18, 18, 4); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.arc(x1, y1, 3.5, 0, 2 * Math.PI); ctx.strokeStyle = '#7a5c10'; ctx.stroke();
+  // tip handle
+  ctx.strokeStyle = '#9c7a18'; ctx.lineWidth = 2.6;
+  const ux = (x2 - x1) / (Math.hypot(x2 - x1, y2 - y1) || 1), uy = (y2 - y1) / (Math.hypot(x2 - x1, y2 - y1) || 1);
+  ctx.beginPath(); ctx.moveTo(x2 - uy * 7, y2 + ux * 7); ctx.lineTo(x2 + uy * 7, y2 - ux * 7); ctx.stroke();
+  ctx.beginPath(); ctx.arc(x2, y2, 5, 0, 2 * Math.PI);
+  ctx.fillStyle = '#e9c46a'; ctx.fill(); ctx.strokeStyle = '#9c7a18'; ctx.lineWidth = 1.5; ctx.stroke();
+  // readout near tip
+  const rx = Math.min(CW - 70, Math.max(4, x2 + 10)), ry = Math.max(14, y2 - 12);
+  ctx.fillStyle = 'rgba(255,255,255,0.95)'; ctx.strokeStyle = '#b9c6d2'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.roundRect(rx, ry - 11, 62, 16, 3); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#7a5c10'; ctx.font = 'bold 11px Segoe UI'; ctx.textAlign = 'left';
+  ctx.fillText(len.toFixed(2) + ' m', rx + 5, ry + 1);
+}
+
+function drawWatch() {
+  const { x, y } = watch;
+  ctx.fillStyle = '#eaf2fb'; ctx.strokeStyle = '#2f6fb3'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.roundRect(x, y, 92, 58, 8); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#fff'; ctx.strokeStyle = '#b9c6d2'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.roundRect(x + 8, y + 7, 76, 22, 3); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#16324f'; ctx.font = 'bold 15px Consolas, monospace'; ctx.textAlign = 'center';
+  ctx.fillText(watch.t.toFixed(2) + ' s', x + 46, y + 24);
+  // start/stop button
+  ctx.beginPath(); ctx.roundRect(x + 10, y + 34, 34, 18, 4);
+  ctx.fillStyle = watch.run ? '#d9542e' : '#2eaa3e'; ctx.fill();
+  ctx.fillStyle = '#fff';
+  if (watch.run) { ctx.fillRect(x + 22, y + 39, 3.4, 8); ctx.fillRect(x + 28, y + 39, 3.4, 8); }
+  else { ctx.beginPath(); ctx.moveTo(x + 24, y + 38); ctx.lineTo(x + 32, y + 43); ctx.lineTo(x + 24, y + 48); ctx.closePath(); ctx.fill(); }
+  // reset button
+  ctx.beginPath(); ctx.roundRect(x + 48, y + 34, 34, 18, 4); ctx.fillStyle = '#8b9aa8'; ctx.fill();
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 12px Segoe UI';
+  ctx.fillText('↺', x + 65, y + 47.5);
+}
+
+const PLAY = { x: 300, y: 477, r: 16 }, STEP = { x: 338, y: 477, r: 11 };
+const RAD_N = { x: 170, y: 477 }, RAD_S = { x: 238, y: 477 };
+function drawTransport() {
+  // slow-motion radios
+  for (const [rd, lbl, on] of [[RAD_N, 'Normal', !slow], [RAD_S, 'Slow', slow]]) {
+    ctx.beginPath(); ctx.arc(rd.x, rd.y, 6, 0, 2 * Math.PI);
+    ctx.fillStyle = '#fff'; ctx.fill(); ctx.strokeStyle = '#2f6fb3'; ctx.lineWidth = 1.6; ctx.stroke();
+    if (on) { ctx.beginPath(); ctx.arc(rd.x, rd.y, 3.2, 0, 2 * Math.PI); ctx.fillStyle = '#2f6fb3'; ctx.fill(); }
+    ctx.fillStyle = '#fff'; ctx.font = '11.5px Segoe UI'; ctx.textAlign = 'left';
+    ctx.fillText(lbl, rd.x + 10, rd.y + 4);
+  }
+  // play/pause
+  ctx.beginPath(); ctx.arc(PLAY.x, PLAY.y, PLAY.r, 0, 2 * Math.PI);
+  ctx.fillStyle = '#2f6fb3'; ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+  ctx.fillStyle = '#fff';
+  if (paused) {
+    ctx.beginPath(); ctx.moveTo(PLAY.x - 4.5, PLAY.y - 7.5); ctx.lineTo(PLAY.x + 8, PLAY.y);
+    ctx.lineTo(PLAY.x - 4.5, PLAY.y + 7.5); ctx.closePath(); ctx.fill();
+  } else {
+    ctx.fillRect(PLAY.x - 6, PLAY.y - 7, 4.4, 14); ctx.fillRect(PLAY.x + 2, PLAY.y - 7, 4.4, 14);
+  }
+  // step
+  ctx.beginPath(); ctx.arc(STEP.x, STEP.y, STEP.r, 0, 2 * Math.PI);
+  ctx.fillStyle = paused ? '#2f6fb3' : 'rgba(47,111,179,0.45)'; ctx.fill();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.6; ctx.stroke();
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.moveTo(STEP.x - 5, STEP.y - 5); ctx.lineTo(STEP.x + 2, STEP.y);
+  ctx.lineTo(STEP.x - 5, STEP.y + 5); ctx.closePath(); ctx.fill();
+  ctx.fillRect(STEP.x + 3, STEP.y - 5, 2.2, 10);
+}
+
+function drawHints() {
+  ctx.font = '11.5px Segoe UI'; ctx.fillStyle = '#7d97ad'; ctx.textAlign = 'center';
+  if (!placedOnce && st.mode === 'ground' && Math.abs(st.v) < 0.01)
+    ctx.fillText('Drag ' + (charType === 'cat' ? 'the cat' : 'Emilie') + ' onto the track', w2x(st.x), w2y(st.y) - 58);
+  if (PRESETS[trackKey].editable)
+    ctx.fillText('Drag the red dots to shape the track', 300, 20);
+}
+
+// --- Simulation loop -----------------------------------------------------
+function doSubstep() {
+  const b = fric * FRICTION_SCALE;
+  stepSkater(st, track, SUBDT, g, (st.mode === 'track' || st.mode === 'ground') ? b : 0, stick);
+  if (watch.run) watch.t += SUBDT;
+}
+function frame(ts) {
+  if (lastTs === null) lastTs = ts;
+  const dt = Math.min((ts - lastTs) / 1000, 0.05);
+  lastTs = ts;
+  if (!paused && st.mode !== 'drag') {
+    acc += dt * (slow ? 0.25 : 1);
+    if (acc > 0.1) acc = 0.1;
+    while (acc >= SUBDT) { doSubstep(); acc -= SUBDT; }
+  }
+  draw();
+  requestAnimationFrame(frame);
+}
+
+// --- Pointer interaction ---------------------------------------------------
+let dragKind = null, dragOff = { x: 0, y: 0 };
+function hitSkater(mx, my) {
+  return Math.hypot(mx - w2x(st.x), my - (w2y(st.y) - 20)) < 32;
+}
+canvas.addEventListener('pointerdown', e => {
+  const mx = e.offsetX, my = e.offsetY;
+  canvas.setPointerCapture(e.pointerId);
+  // transport
+  if (!HIDEHUD) {
+    if (Math.hypot(mx - PLAY.x, my - PLAY.y) < PLAY.r + 4) { paused = !paused; return; }
+    if (Math.hypot(mx - STEP.x, my - STEP.y) < STEP.r + 4) {
+      if (!paused) paused = true;
+      else for (let i = 0; i < 4; i++) doSubstep();
+      return;
+    }
+    if (Math.hypot(mx - RAD_N.x, my - RAD_N.y) < 9 || (mx > RAD_N.x && mx < RAD_N.x + 56 && Math.abs(my - RAD_N.y) < 9)) { slow = false; return; }
+    if (Math.hypot(mx - RAD_S.x, my - RAD_S.y) < 9 || (mx > RAD_S.x && mx < RAD_S.x + 40 && Math.abs(my - RAD_S.y) < 9)) { slow = true; return; }
+  }
+  // stopwatch
+  if (showWatch) {
+    const { x, y } = watch;
+    if (mx > x + 10 && mx < x + 44 && my > y + 34 && my < y + 52) { watch.run = !watch.run; return; }
+    if (mx > x + 48 && mx < x + 82 && my > y + 34 && my < y + 52) { watch.t = 0; watch.run = false; return; }
+    if (mx > x && mx < x + 92 && my > y && my < y + 58) {
+      dragKind = 'watch'; dragOff = { x: mx - x, y: my - y }; return;
+    }
+  }
+  // tape handles
+  if (showTape) {
+    if (Math.hypot(mx - w2x(tape.x2), my - w2y(tape.y2)) < 12) { dragKind = 'tape2'; return; }
+    if (Math.hypot(mx - w2x(tape.x1), my - w2y(tape.y1)) < 12) { dragKind = 'tape1'; return; }
+  }
+  // reference height handle
+  if (showRef && Math.abs(my - w2y(refY)) < 12 && mx > 186 && mx < 226) { dragKind = 'ref'; return; }
+  // control points
+  if (PRESETS[trackKey].editable) {
+    for (let i = pts.length - 1; i >= 0; i--) {
+      if (Math.hypot(mx - w2x(pts[i][0]), my - w2y(pts[i][1])) < 12) {
+        dragKind = 'cp' + i; selPt = i; return;
+      }
+    }
+  }
+  // skater
+  if (hitSkater(mx, my)) {
+    dragKind = 'skater'; st.mode = 'drag';
+    st.x = x2w(mx); st.y = Math.max(0, y2w(my));
+    return;
+  }
+});
+canvas.addEventListener('pointermove', e => {
+  const mx = e.offsetX, my = e.offsetY;
+  if (!dragKind) {
+    let hov = hitSkater(mx, my) ||
+      (showWatch && mx > watch.x && mx < watch.x + 92 && my > watch.y && my < watch.y + 58) ||
+      (showTape && (Math.hypot(mx - w2x(tape.x2), my - w2y(tape.y2)) < 12 || Math.hypot(mx - w2x(tape.x1), my - w2y(tape.y1)) < 12)) ||
+      (showRef && Math.abs(my - w2y(refY)) < 12 && mx > 186 && mx < 226);
+    if (PRESETS[trackKey].editable)
+      for (const p of pts) if (Math.hypot(mx - w2x(p[0]), my - w2y(p[1])) < 12) hov = true;
+    canvas.style.cursor = hov ? 'grab' : 'default';
+    return;
+  }
+  canvas.style.cursor = 'grabbing';
+  if (dragKind === 'skater') {
+    st.x = Math.min(10.6, Math.max(0.05, x2w(mx)));
+    st.y = Math.min(8.2, Math.max(0, y2w(my)));
+  } else if (dragKind === 'watch') {
+    watch.x = Math.min(CW - 94, Math.max(2, mx - dragOff.x));
+    watch.y = Math.min(CH - 60, Math.max(2, my - dragOff.y));
+  } else if (dragKind === 'tape1' || dragKind === 'tape2') {
+    const wx = Math.min(10.6, Math.max(0, x2w(mx))), wy = Math.min(8.3, Math.max(0, y2w(my)));
+    if (dragKind === 'tape1') { tape.x1 = wx; tape.y1 = wy; }
+    else {
+      tape.x2 = wx; tape.y2 = wy;
+      if (Math.abs(tape.x2 - tape.x1) < 0.07) tape.x2 = tape.x1;   // vertical assist
+    }
+  } else if (dragKind === 'ref') {
+    refY = Math.min(8, Math.max(0, y2w(my)));
+  } else if (dragKind.startsWith('cp')) {
+    const i = +dragKind.slice(2);
+    pts[i][0] = Math.min(10.5, Math.max(0.2, x2w(mx)));
+    pts[i][1] = Math.min(8.2, Math.max(0.05, y2w(my)));
+    rebuild();
+    if (st.mode === 'track') {
+      st.s = Math.min(st.s, track.total - 0.001);
+      const q = trackQuery(track, st.s);
+      st.x = q.x; st.y = q.y; st.em0 = 0.5 * st.v * st.v + g * q.y + st.eth;
+    }
+  }
+});
+function endDrag(e) {
+  if (dragKind === 'skater') {
+    releaseSkaterAt(st.x, st.y);
+    placedOnce = true;
+  }
+  dragKind = null;
+  canvas.style.cursor = 'default';
+}
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointercancel', endDrag);
+
+// --- Panel controls ----------------------------------------------------------
+document.querySelectorAll('#trackBtns button').forEach(b =>
+  b.addEventListener('click', () => setTrack(b.dataset.t, false)));
+document.getElementById('addPt').addEventListener('click', () => {
+  if (pts.length >= 12) return;
+  let i = Math.min(selPt, pts.length - 1);
+  if (i >= pts.length - 1) {
+    const a = pts[pts.length - 2], b = pts[pts.length - 1];
+    const nx = Math.min(10.4, b[0] + Math.max(0.6, (b[0] - a[0]) * 0.6));
+    pts.push([nx, Math.min(7.5, Math.max(0.3, b[1] + (b[1] - a[1]) * 0.4))]);
+    selPt = pts.length - 1;
+  } else {
+    pts.splice(i + 1, 0, [(pts[i][0] + pts[i + 1][0]) / 2, (pts[i][1] + pts[i + 1][1]) / 2]);
+    selPt = i + 1;
+  }
+  rebuild();
+});
+document.getElementById('delPt').addEventListener('click', () => {
+  if (pts.length <= 3) return;
+  pts.splice(Math.min(selPt, pts.length - 1), 1);
+  selPt = Math.max(0, selPt - 1);
+  rebuild();
+  if (st.mode === 'track') restartSkater();
+});
+const bindCb = (id, fn) => document.getElementById(id).addEventListener('change', e => fn(e.target.checked));
+bindCb('cbBars', v => showBars = v);
+bindCb('cbSpeed', v => showSpeed = v);
+bindCb('cbGrid', v => showGrid = v);
+bindCb('cbRef', v => showRef = v);
+bindCb('cbTape', v => showTape = v);
+bindCb('cbWatch', v => showWatch = v);
+bindCb('cbStick', v => stick = v);
+document.getElementById('slG').addEventListener('input', e => setG(+e.target.value));
+document.getElementById('slF').addEventListener('input', e => setFric(+e.target.value));
+document.getElementById('gMoon').addEventListener('click', () => setG(1.6));
+document.getElementById('gEarth').addEventListener('click', () => setG(9.8));
+document.getElementById('gJup').addEventListener('click', () => setG(24.8));
+document.getElementById('btnRestart').addEventListener('click', restartSkater);
+document.getElementById('btnReset').addEventListener('click', initFromParams);
+
+// --- Calibration self-test (?selftest=1, results in the console) -------------
+function runSelfTest() {
+  const out = [];
+  const chk = (name, val, lo, hi) =>
+    out.push((val >= lo && val <= hi ? 'PASS  ' : 'FAIL  ') + name + ' = ' + val + '  (accept ' + lo + ' .. ' + hi + ')');
+  // 1. W lap
+  const wTr = catmullSample(PRESETS.w.pts, 90);
+  const s0 = sAtHeight(wTr, 4.6);
+  chk('W lap from 4.6 m start, g=9.8 (s)', +lapTime(wTr, s0, 9.8).toFixed(3), 5.28, 5.32);
+  chk('W dash-2 center = standard start (m)', +(2 * PRESETS.w.dashGap + 1.5 * DASH).toFixed(3), s0 - 0.01, s0 + 0.01);
+  // 2. ramp v^2-vs-y fit
+  const rTr = catmullSample(PRESETS.ramp.pts, 90);
+  const fit = gg => {
+    const stt = newSkater(); placeOnTrack(stt, rTr, sAtHeight(rTr, 4.6), gg);
+    const ys = [], v2 = []; let t = 0, i = 0;
+    while (stt.mode === 'track' && stt.y > 0.7 && t < 20) {
+      stepSkater(stt, rTr, SUBDT, gg, 0, true); t += SUBDT;
+      if (++i % 12 === 0 && Math.abs(stt.v) > 0.3) { ys.push(stt.y); v2.push(stt.v * stt.v); }
+    }
+    const n = ys.length, sx = ys.reduce((a, b) => a + b), sy = v2.reduce((a, b) => a + b);
+    const sxx = ys.reduce((a, b) => a + b * b, 0), sxy = ys.reduce((a, y, j) => a + y * v2[j], 0);
+    const sl = (n * sxy - sx * sy) / (n * sxx - sx * sx);
+    return { sl, ic: (sy - sl * sx) / n };
+  };
+  let f1 = fit(9.8);
+  chk('ramp v^2 intercept, g=9.8 (m^2/s^2)', +f1.ic.toFixed(2), 89.5, 90.8);
+  chk('ramp v^2 slope = -2g, g=9.8', +f1.sl.toFixed(2), -19.7, -19.5);
+  chk('ramp run to v^2=0 (m)', +(-f1.ic / f1.sl).toFixed(3), 4.59, 4.61);
+  f1 = fit(13.3);
+  chk('ramp v^2 intercept, g=13.3', +f1.ic.toFixed(1), 121.7, 123.0);
+  // 3. kitty equilibria
+  chk('kitty stable equilibria (of 8 ctrl pts)', countStableEquilibria(catmullSample(PRESETS.kitty.pts, 90), 0.02).length, 3, 3);
+  chk('U valley equilibria', countStableEquilibria(catmullSample(PRESETS.u.pts, 90), 0.02).length, 1, 1);
+  // 4. steps scenario at g=10, stick off
+  const sTr = catmullSample(PRESETS.steps.pts, 70);
+  const runSteps = f => {
+    const stt = newSkater(); placeOnTrack(stt, sTr, 0.001, 10);
+    let t = 0, L = [], turn = null, pv;
+    while (t < 25) {
+      pv = stt.v;
+      const ev = stepSkater(stt, sTr, SUBDT, 10, stt.mode === 'track' ? f * FRICTION_SCALE : 0, false);
+      t += SUBDT;
+      if (ev === 'detach' || ev === 'left-end') L.push({ x: stt.x, sp: Math.hypot(stt.vx, stt.vy) });
+      if (L.length && stt.mode === 'track' && !turn && pv > 1e-9 && stt.v <= 0) { turn = stt.x; break; }
+      if (stt.mode === 'ground') break;
+    }
+    return { L, turn };
+  };
+  const r0 = runSteps(0);
+  chk('steps launch speed, frictionless (m/s)', +r0.L[0].sp.toFixed(3), 4.295, 4.306);
+  chk('steps launch KE label (J)', Math.round(30 * r0.L[0].sp * r0.L[0].sp), 555, 555);
+  chk('steps far-edge speed, frictionless (m/s)', +r0.L[1].sp.toFixed(3), 2.19, 2.21);
+  chk('steps far-edge KE label (J)', Math.round(30 * r0.L[1].sp * r0.L[1].sp), 145, 145);
+  const r1 = runSteps(0.0089);
+  chk('steps launch speed at friction 0.0089', +r1.L[0].sp.toFixed(3), 3.69, 3.71);
+  chk('steps stop-at-edge gap (m, vs lip x=' + r0.L[1].x.toFixed(2) + ')', +(r1.turn - r0.L[1].x).toFixed(3), -0.12, 0.05);
+  console.log('Skate Park calibration self-test\n' + out.join('\n'));
+  return out;
+}
+
+// --- Boot ----------------------------------------------------------------
+initFromParams();
+if (qFlag('selftest', false)) setTimeout(runSelfTest, 50);
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

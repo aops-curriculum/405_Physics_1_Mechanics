@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Gas in a Box</title>
+  <!-- Original AoPS interactive. Replaces the third-party "Gas Properties" simulation. -->
+<script>
+// EigenNode auto-height v2.4
+(function() {
+  // 4px buffer for subpixel rounding + parent's >=3px noise threshold.
+  // Extra 18px when horizontal overflow forces a scrollbar (eats vertical
+  // space inside the iframe — AoPS classroom embeds in a narrower column
+  // than the 600px content, so a horizontal scrollbar appears and steals
+  // ~10-17px of height). Without this, the iframe ends up ~11-15px short.
+  var BUFFER = 4;
+  var H_SCROLLBAR = 18;
+  var measuring = false;
+  function measure() {
+    if (measuring) return 0;
+    var b = document.body, h = document.documentElement;
+    if (!b) return 0;
+    measuring = true;
+    // Temporarily neutralise body's height/min-height (overriding stylesheet
+    // rules with !important) so scrollHeight reflects actual content extent.
+    // Without this, patterns like body { height: 100vh } cause scrollHeight
+    // to echo the iframe's current viewport — adding BUFFER each cycle
+    // ratchets the iframe taller forever. Browser doesn't paint until this
+    // synchronous block returns, so no visible flicker.
+    var hOld = b.style.height, hPri = b.style.getPropertyPriority('height');
+    var mOld = b.style.minHeight, mPri = b.style.getPropertyPriority('min-height');
+    b.style.setProperty('height', 'auto', 'important');
+    b.style.setProperty('min-height', '0', 'important');
+    var content = b.scrollHeight || 0;
+    if (hOld) b.style.setProperty('height', hOld, hPri); else b.style.removeProperty('height');
+    if (mOld) b.style.setProperty('min-height', mOld, mPri); else b.style.removeProperty('min-height');
+    measuring = false;
+    // Check the documentElement only — that's the element that owns the
+    // iframe's horizontal scrollbar. Body can be narrower than the iframe
+    // (e.g. body{width:600px} centered in a 700px iframe) and have its own
+    // 1-2px overflow that doesn't actually trigger a scrollbar.
+    var hOverflow = h && (h.scrollWidth - h.clientWidth) >= 4;
+    return Math.ceil(content) + BUFFER + (hOverflow ? H_SCROLLBAR : 0);
+  }
+  var last = 0;
+  function report() {
+    var h = measure();
+    if (h > 0 && Math.abs(h - last) >= 2) {
+      last = h;
+      window.parent.postMessage({ type: 'resize', height: h }, '*');
+    }
+  }
+  window.addEventListener('load', report);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(report);
+  if (window.ResizeObserver && document.body) new ResizeObserver(report).observe(document.body);
+})();
+</script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 420px; height: 340px; overflow: hidden;
+      background: #f4f6fa;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    canvas { display: block; }
+    #ui {
+      width: 420px; height: 38px; padding: 0 8px;
+      font-size: 11px; color: #334455;
+      display: flex; align-items: center; gap: 8px;
+    }
+    button {
+      font-family: inherit; font-size: 11px; padding: 2px 8px;
+      border: 1px solid #b8c4d4; border-radius: 4px;
+      background: #ffffff; color: #334455; cursor: pointer;
+    }
+    button:hover { background: #eef3f9; }
+    label { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+    input[type=range] { vertical-align: middle; }
+  </style>
+</head>
+<body>
+  <canvas id="c" width="420" height="302"></canvas>
+  <div id="ui">
+    <button id="playBtn">&#10074;&#10074;</button>
+    <button id="resetBtn">&#8634;</button>
+    <label>Temperature
+      <input type="range" id="temp" min="50" max="600" step="5" value="300" style="width:130px">
+    </label>
+    <span id="tempVal" style="min-width:44px">300 K</span>
+  </div>
+  <script>
+  (() => {
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    const W = 420, H = 302;
+
+    // Box interior (gas region)
+    const BL = 14, BR = 320, BT = 34, BB = 292;
+    const AREA = (BR - BL) * (BB - BT);
+    const PERIM = 2 * ((BR - BL) + (BB - BT));
+    const PR = 3.2;                       // particle radius, px
+
+    const T_DEFAULT = 300;
+    const VRMS300 = 95;                   // rms speed (px/s) at 300 K
+    const N_DEFAULT = 120;
+    const SUBDT = 1 / 240;
+
+    const Q = new URLSearchParams(location.search);
+    const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+    const N = clamp(Math.round(parseFloat(Q.get('n')) || N_DEFAULT), 10, 250);
+    const T0 = clamp(Math.round(parseFloat(Q.get('T')) || T_DEFAULT), 50, 600);
+
+    // Reference pressure (impulse/s per px of wall) for the gauge: the
+    // 2-D ideal-gas value N m <v^2> / (2 A) at 300 K with the default count.
+    const P_REF = N_DEFAULT * VRMS300 * VRMS300 / (2 * AREA);   // reads 15.0 atm
+
+    // ── Deterministic RNG ────────────────────────────────────
+    function mulberry32(a) {
+      return function() {
+        a |= 0; a = a + 0x6D2B79F5 | 0;
+        let t = Math.imul(a ^ a >>> 15, 1 | a);
+        t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+        return ((t ^ t >>> 14) >>> 0) / 4294967296;
+      };
+    }
+
+    // ── State ────────────────────────────────────────────────
+    const px = new Float64Array(N), py = new Float64Array(N);
+    const vx = new Float64Array(N), vy = new Float64Array(N);
+    let playing = Q.get('paused') === '1' ? false : true;
+    let impulse = 0;       // accumulated wall impulse since last frame
+    let pSmooth = 0;       // smoothed pressure (impulse/s/px)
+    let stepAcc = 0;
+
+    const vrmsAt = T => VRMS300 * Math.sqrt(T / 300);
+
+    function meanV2() {
+      let s = 0;
+      for (let i = 0; i < N; i++) s += vx[i] * vx[i] + vy[i] * vy[i];
+      return s / N;
+    }
+
+    function initParticles(T) {
+      const rnd = mulberry32(20260611);
+      // non-overlapping positions
+      for (let i = 0; i < N; i++) {
+        let ok = false, tries = 0;
+        while (!ok && tries++ < 400) {
+          px[i] = BL + PR + rnd() * (BR - BL - 2 * PR);
+          py[i] = BT + PR + rnd() * (BB - BT - 2 * PR);
+          ok = true;
+          for (let j = 0; j < i; j++) {
+            const dx = px[i] - px[j], dy = py[i] - py[j];
+            if (dx * dx + dy * dy < (2.4 * PR) * (2.4 * PR)) { ok = false; break; }
+          }
+        }
+      }
+      // Maxwell-ish velocities (Box-Muller), then rescale to the exact T
+      const sigma = vrmsAt(T) / Math.SQRT2;
+      for (let i = 0; i < N; i++) {
+        const u1 = Math.max(1e-12, rnd()), u2 = rnd();
+        const g = Math.sqrt(-2 * Math.log(u1));
+        vx[i] = sigma * g * Math.cos(2 * Math.PI * u2);
+        vy[i] = sigma * g * Math.sin(2 * Math.PI * u2);
+      }
+      const scale = vrmsAt(T) / Math.sqrt(meanV2());
+      for (let i = 0; i < N; i++) { vx[i] *= scale; vy[i] *= scale; }
+      impulse = 0;
+      pSmooth = P_REF * (T / 300) * (N / N_DEFAULT);
+    }
+
+    function setTemperature(T) {
+      const scale = vrmsAt(T) / Math.sqrt(meanV2());
+      for (let i = 0; i < N; i++) { vx[i] *= scale; vy[i] *= scale; }
+    }
+
+    // ── Physics ──────────────────────────────────────────────
+    function substep(h) {
+      for (let i = 0; i < N; i++) {
+        px[i] += vx[i] * h;
+        py[i] += vy[i] * h;
+        // walls (elastic; impulse recorded for the pressure gauge)
+        if (px[i] < BL + PR) { px[i] = 2 * (BL + PR) - px[i]; impulse += 2 * Math.abs(vx[i]); vx[i] = -vx[i]; }
+        else if (px[i] > BR - PR) { px[i] = 2 * (BR - PR) - px[i]; impulse += 2 * Math.abs(vx[i]); vx[i] = -vx[i]; }
+        if (py[i] < BT + PR) { py[i] = 2 * (BT + PR) - py[i]; impulse += 2 * Math.abs(vy[i]); vy[i] = -vy[i]; }
+        else if (py[i] > BB - PR) { py[i] = 2 * (BB - PR) - py[i]; impulse += 2 * Math.abs(vy[i]); vy[i] = -vy[i]; }
+      }
+      // pairwise elastic collisions (equal masses: swap normal components)
+      const d2max = 4 * PR * PR;
+      for (let i = 0; i < N; i++) {
+        for (let j = i + 1; j < N; j++) {
+          const dx = px[j] - px[i], dy = py[j] - py[i];
+          const d2 = dx * dx + dy * dy;
+          if (d2 >= d2max || d2 === 0) continue;
+          const d = Math.sqrt(d2), nx = dx / d, ny = dy / d;
+          const rel = (vx[i] - vx[j]) * nx + (vy[i] - vy[j]) * ny;
+          if (rel <= 0) continue;          // moving apart already
+          vx[i] -= rel * nx; vy[i] -= rel * ny;
+          vx[j] += rel * nx; vy[j] += rel * ny;
+          const push = (2 * PR - d) / 2 + 0.01;
+          px[i] -= push * nx; py[i] -= push * ny;
+          px[j] += push * nx; py[j] += push * ny;
+        }
+      }
+    }
+
+    // ── Drawing ──────────────────────────────────────────────
+    function drawBox() {
+      ctx.fillStyle = '#0b0d16';
+      ctx.fillRect(BL, BT, BR - BL, BB - BT);
+      ctx.strokeStyle = '#b9c0cc'; ctx.lineWidth = 5;
+      ctx.strokeRect(BL - 2.5, BT - 2.5, BR - BL + 5, BB - BT + 5);
+      ctx.strokeStyle = '#8d96a6'; ctx.lineWidth = 1;
+      ctx.strokeRect(BL - 5, BT - 5, BR - BL + 10, BB - BT + 10);
+    }
+
+    function drawParticles() {
+      ctx.fillStyle = '#8fc4ff';
+      for (let i = 0; i < N; i++) {
+        ctx.beginPath(); ctx.arc(px[i], py[i], PR, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.fillStyle = 'rgba(255,255,255,0.55)';
+      for (let i = 0; i < N; i++) {
+        ctx.beginPath(); ctx.arc(px[i] - 1, py[i] - 1, 1.1, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+
+    function drawThermometer(T) {
+      const x = 252, stemTop = 8, stemBot = 40, bulbY = 47, bulbR = 7.5;
+      // mount hole through the top wall
+      ctx.fillStyle = '#7d8696';
+      ctx.fillRect(x - 6, BT - 6, 12, 8);
+      // bulb (inside the gas)
+      ctx.beginPath(); ctx.arc(x, bulbY, bulbR, 0, Math.PI * 2);
+      ctx.fillStyle = '#d8453a'; ctx.fill();
+      ctx.strokeStyle = '#f0f2f6'; ctx.lineWidth = 1.6; ctx.stroke();
+      // stem
+      ctx.fillStyle = '#f7f8fa';
+      ctx.strokeStyle = '#9aa3b2'; ctx.lineWidth = 1.2;
+      const r = 5;
+      ctx.beginPath();
+      ctx.moveTo(x - r, stemBot + 4);
+      ctx.lineTo(x - r, stemTop + r);
+      ctx.arc(x, stemTop + r, r, Math.PI, 0);
+      ctx.lineTo(x + r, stemBot + 4);
+      ctx.fill(); ctx.stroke();
+      // mercury column, height ∝ T
+      const frac = clamp(T / 600, 0.05, 1);
+      const colTop = stemBot + 4 - (stemBot + 4 - (stemTop + 3)) * frac;
+      ctx.fillStyle = '#d8453a';
+      ctx.fillRect(x - 2, colTop, 4, stemBot + 4 - colTop);
+      // scale ticks
+      ctx.strokeStyle = '#9aa3b2'; ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let k = 0; k <= 4; k++) {
+        const ty = stemTop + 4 + k * (stemBot - stemTop - 4) / 4;
+        ctx.moveTo(x + r, ty); ctx.lineTo(x + r + 3, ty);
+      }
+      ctx.stroke();
+      // readout
+      ctx.fillStyle = '#334455'; ctx.font = 'bold 11px Segoe UI'; ctx.textAlign = 'left';
+      ctx.fillText(Math.round(T) + ' K', x + 13, 18);
+    }
+
+    function drawGauge(atm) {
+      const cx = 368, cy = 72, R = 32;
+      // sweep: 0 atm at 150°, 40 atm at 390°
+      const a0 = Math.PI * 150 / 180, a1 = Math.PI * 390 / 180;
+      ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffffff'; ctx.fill();
+      ctx.strokeStyle = '#8d96a6'; ctx.lineWidth = 3; ctx.stroke();
+      // ticks every 5 atm
+      ctx.strokeStyle = '#556070'; ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      for (let v = 0; v <= 40; v += 5) {
+        const a = a0 + (a1 - a0) * v / 40;
+        const big = v % 10 === 0;
+        ctx.moveTo(cx + Math.cos(a) * (R - (big ? 8 : 5)), cy + Math.sin(a) * (R - (big ? 8 : 5)));
+        ctx.lineTo(cx + Math.cos(a) * (R - 2), cy + Math.sin(a) * (R - 2));
+      }
+      ctx.stroke();
+      // needle
+      const a = a0 + (a1 - a0) * clamp(atm, 0, 40) / 40;
+      ctx.strokeStyle = '#d8453a'; ctx.lineWidth = 2.2; ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(cx - Math.cos(a) * 6, cy - Math.sin(a) * 6);
+      ctx.lineTo(cx + Math.cos(a) * (R - 9), cy + Math.sin(a) * (R - 9));
+      ctx.stroke();
+      ctx.beginPath(); ctx.arc(cx, cy, 3, 0, Math.PI * 2);
+      ctx.fillStyle = '#333a45'; ctx.fill();
+      // labels
+      ctx.fillStyle = '#334455'; ctx.font = 'bold 11px Segoe UI'; ctx.textAlign = 'center';
+      ctx.fillText('Pressure', cx, cy + R + 16);
+      ctx.font = '11px Segoe UI';
+      ctx.fillText(atm.toFixed(1) + ' atm', cx, cy + R + 30);
+    }
+
+    function drawPump() {
+      ctx.save();
+      // hose from the pump to the box wall
+      ctx.strokeStyle = '#8d96a6'; ctx.lineWidth = 5; ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(358, 268);
+      ctx.bezierCurveTo(338, 268, 330, 268, 323, 268);
+      ctx.stroke();
+      // T-handle
+      ctx.fillStyle = '#c0392b';
+      ctx.strokeStyle = '#7c241a'; ctx.lineWidth = 1;
+      ctx.fillRect(346, 148, 44, 8); ctx.strokeRect(346, 148, 44, 8);
+      // rod
+      ctx.fillStyle = '#aab2bf';
+      ctx.fillRect(365, 156, 6, 42);
+      // barrel
+      const g = ctx.createLinearGradient(354, 0, 382, 0);
+      g.addColorStop(0, '#9aa3b2'); g.addColorStop(0.5, '#dde2ea'); g.addColorStop(1, '#9aa3b2');
+      ctx.fillStyle = g;
+      ctx.strokeStyle = '#717a89'; ctx.lineWidth = 1.2;
+      ctx.fillRect(354, 198, 28, 84); ctx.strokeRect(354, 198, 28, 84);
+      ctx.fillStyle = '#717a89';
+      ctx.fillRect(351, 194, 34, 6);
+      // base
+      ctx.fillStyle = '#717a89';
+      ctx.fillRect(346, 282, 44, 7);
+      ctx.restore();
+    }
+
+    function draw(T, atm) {
+      ctx.fillStyle = '#f4f6fa';
+      ctx.fillRect(0, 0, W, H);
+      drawBox();
+      drawParticles();
+      drawThermometer(T);
+      drawGauge(atm);
+      drawPump();
+    }
+
+    // ── Animation loop ───────────────────────────────────────
+    let lastTs = null;
+    function frame(ts) {
+      if (lastTs === null) lastTs = ts;
+      const dt = Math.min((ts - lastTs) / 1000, 0.05);
+      lastTs = ts;
+      if (playing && dt > 0) {
+        stepAcc += dt;
+        let n = Math.floor(stepAcc / SUBDT);
+        if (n > 30) n = 30;
+        stepAcc -= n * SUBDT;
+        for (let k = 0; k < n; k++) substep(SUBDT);
+        if (n > 0) {
+          const inst = impulse / (n * SUBDT) / PERIM;
+          impulse = 0;
+          const alpha = 1 - Math.exp(-(n * SUBDT) / 0.8);
+          pSmooth += (inst - pSmooth) * alpha;
+        }
+      }
+      const Tmeas = 300 * meanV2() / (VRMS300 * VRMS300);
+      const atm = 15 * pSmooth / P_REF;
+      draw(Tmeas, atm);
+      requestAnimationFrame(frame);
+    }
+
+    // ── Controls ─────────────────────────────────────────────
+    const playBtn = document.getElementById('playBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const tempSl = document.getElementById('temp');
+    const tempVal = document.getElementById('tempVal');
+
+    function updatePlayBtn() {
+      playBtn.innerHTML = playing ? '&#10074;&#10074;' : '&#9654;';
+    }
+    playBtn.addEventListener('click', () => { playing = !playing; updatePlayBtn(); });
+    resetBtn.addEventListener('click', () => {
+      tempSl.value = T0;
+      tempVal.textContent = T0 + ' K';
+      initParticles(T0);
+    });
+    tempSl.addEventListener('input', () => {
+      const T = parseFloat(tempSl.value);
+      tempVal.textContent = Math.round(T) + ' K';
+      setTemperature(T);
+    });
+
+    tempSl.value = T0;
+    tempVal.textContent = T0 + ' K';
+    initParticles(T0);
+    updatePlayBtn();
+    requestAnimationFrame(frame);
+  })();
+  </script>
+</body>
+</html>

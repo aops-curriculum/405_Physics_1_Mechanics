@@ -88,7 +88,7 @@
     H     = Math.round(W * 0.72);
     scale = W / 3.5;   // scene range ≈ ±1.75 units visible
     ox    = W / 2;
-    oy    = H * 0.52;  // GlowScript y=0 maps to slightly above canvas center
+    oy    = H * 0.18;  // GlowScript y=0 maps near top; content (y≈-0.8) centres in canvas
     dpr   = window.devicePixelRatio || 1;
     canvas.width  = Math.round(W * dpr);
     canvas.height = Math.round(H * dpr);

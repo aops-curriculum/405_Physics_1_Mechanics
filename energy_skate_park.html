@@ -25,10 +25,12 @@
   aspect ratio, centred, capped at a maximum size. The earlier fixed-pixel
   layout + "auto-height v2.4" height-measuring snippet are replaced by the fit
   controller near the bottom of the main script (search "RESPONSIVE FIT
-  CONTROLLER"). It still posts the parent { type:'resize', height } messages,
-  so inline (non-sticky) embeds auto-size to the sim with no grey gap, while a
-  fixed/draggable sticky box is filled by scale-to-fit. Tunable per embed with
-  ?maxw= / ?maxh= (CSS px) and ?maxscale=.
+  CONTROLLER"). The classroom sizes the iframe/sticky to the { type:'resize',
+  height } we post and does NOT clamp it, so the reported height is BOUNDED
+  (default <=320px) to avoid spilling the sticky; the sim then scale-fits
+  whatever box it lands in. Tunable per embed: ?h=NNN sets an exact sticky
+  height (sim fills it), ?maxh=NNN raises the anti-spill ceiling, ?maxw= /
+  ?maxscale= bound the render zoom.
 -->
 
   <style>
@@ -1207,38 +1209,51 @@ function runSelfTest() {
 }
 
 // --- RESPONSIVE FIT CONTROLLER ----------------------------------------------
-// Scale #stage to fill the iframe viewport, preserving aspect ratio, centred,
-// capped at a maximum size. Also report a width-derived height to the parent
-// classroom so inline (non-sticky) embeds auto-size to the sim with no grey
-// gap; a fixed or draggable "sticky" box that ignores the report is simply
-// filled by scale-to-fit (letter-boxed only until its shape matches the sim's,
-// at which point the bottom of the box meets the bottom of the sim).
+// Two independent jobs:
+//   (1) REPORT a height to the AoPS classroom. The classroom sizes the iframe
+//       (and the sticky that holds it) to exactly the height we post, with NO
+//       upper clamp of its own — so an unbounded, width-derived height balloons
+//       past the visible sticky and "spills" down the feed. We therefore BOUND
+//       what we report. It never exceeds a sticky-safe ceiling.
+//         ?h=NNN    -> always report exactly NNN px (set the sticky height you
+//                      want; the sim then fills that box).
+//         otherwise -> the sim-shaped height for the current width, but capped
+//                      at ?maxh (default 320) so it can't overrun a sticky.
+//   (2) SCALE #stage to fit whatever box we actually occupy (preserve aspect
+//       ratio, centre, cap the zoom). This is what makes it responsive: it
+//       fills the width it's given and is never cut off. The render-scale cap
+//       is independent of the reported height, so the stand-alone window view
+//       can still grow large while the embedded height stays sticky-safe.
 const stage = document.getElementById('stage');
-// Maximum on-screen size so the sim never dominates the lesson feed. Tunable
-// per embed with ?maxw= / ?maxh= (CSS px) or ?maxscale= (hard scale cap).
 const MAXW = qNum('maxw', 860);          // px — widest the sim may render
-const MAXH = qNum('maxh', 560);          // px — tallest the sim may render
 const MAXSCALE = qNum('maxscale', 2.4);  // absolute cap on the zoom factor
+const FIXED_H = qNum('h', 0);            // >0 => always report exactly this many px
+const REPORT_MAX = qNum('maxh', 320);    // px ceiling on the reported height (anti-spill)
+const REPORT_MIN = 140;                  // px floor (avoid a degenerate sliver)
 let lastReport = 0;
 function fitStage() {
   const natW = stage.offsetWidth || (CLEAN ? 384 : 584);   // untransformed layout size
   const natH = stage.offsetHeight || 304;
   const vw = document.documentElement.clientWidth;
   const vh = document.documentElement.clientHeight;
-  const cap = Math.min(MAXSCALE, MAXW / natW, MAXH / natH);
-  // Width-derived height: ask the parent to size the iframe to exactly hold the
-  // sim at the current width (capped). Depends only on width, so it can't feed
-  // back through the height it sets — no oscillation.
-  const sWidth = Math.min(vw / natW, cap);
-  const reportH = Math.max(1, Math.round(natH * sWidth));
+  const cap = Math.min(MAXSCALE, MAXW / natW);   // render-scale ceiling (height-independent)
+  // (1) Height to report. An explicit ?h= is honoured as-is (sane bounds only);
+  //     otherwise use the sim-shaped height for this width, capped so it can
+  //     never overrun a sticky.
+  let reportH;
+  if (FIXED_H > 0) {
+    reportH = Math.max(80, Math.min(2000, FIXED_H));
+  } else {
+    reportH = Math.round(natH * Math.min(vw / natW, cap));
+    reportH = Math.max(REPORT_MIN, Math.min(REPORT_MAX, reportH));
+  }
   if (Math.abs(reportH - lastReport) >= 2) {
     lastReport = reportH;
     try { window.parent.postMessage({ type: 'resize', height: reportH }, '*'); } catch (e) {}
   }
-  // Actual fit uses whatever height the viewport currently has (a sticky box
-  // may be taller or shorter than the report we sent).
+  // (2) Scale to fit the box we actually occupy (sticky/iframe or window).
   let s = Math.min(vw / natW, vh / natH, cap);
-  if (!isFinite(s) || s <= 0) s = sWidth;   // first paint, before the parent honours the report
+  if (!isFinite(s) || s <= 0) s = Math.min(vw / natW, cap);   // first paint, before parent honours the report
   stage.style.transform = 'translate(-50%, -50%) scale(' + s + ')';
   setRes(s * dpr);                          // keep the canvas crisp when enlarged
 }

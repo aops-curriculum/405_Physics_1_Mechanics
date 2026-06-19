@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Stick on Cylinder</title>
+  <!-- Original AoPS interactive. Faithful 2D replacement for the GlowScript
+       "stickcylinder" program: a uniform stick resting on a cylinder, with sliders
+       for cylinder radius R, stick length L, and tilt angle θ. The black dot marks
+       the center of mass. A warning appears if the contact point would fall beyond
+       the end of the stick. -->
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { background: #fff; font-family: 'Segoe UI', system-ui, sans-serif; user-select: none; -webkit-user-select: none; }
+    canvas { display: block; }
+    .controls { padding: 8px 12px; font-size: 14px; }
+    .ctrl-row { margin-bottom: 8px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    input[type=range] { width: 200px; vertical-align: middle; }
+    #warning { color: #b91c1c; font-size: 13px; min-height: 18px; margin-top: 4px; }
+  </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="controls">
+  <div class="ctrl-row">
+    <input type="range" id="Rslider" min="0.02" max="1" step="0.02" value="0.25">
+    <span id="Rlabel">R: 0.25 m</span>
+  </div>
+  <div class="ctrl-row">
+    <input type="range" id="Lslider" min="1" max="5" step="0.1" value="1">
+    <span id="Llabel">L: 1.0 m</span>
+  </div>
+  <div class="ctrl-row">
+    <input type="range" id="thetaSlider" min="-1.6" max="1.6" step="0.02" value="0">
+    <span id="thetaLabel">θ: 0.00</span>
+  </div>
+  <div id="warning"></div>
+</div>
+<script>
+(function() {
+  var BUFFER = 4, H_SCROLLBAR = 18, measuring = false;
+  function measure() {
+    if (measuring) return 0;
+    var b = document.body, h = document.documentElement;
+    if (!b) return 0;
+    measuring = true;
+    var hOld = b.style.height, hPri = b.style.getPropertyPriority('height');
+    var mOld = b.style.minHeight, mPri = b.style.getPropertyPriority('min-height');
+    b.style.setProperty('height', 'auto', 'important');
+    b.style.setProperty('min-height', '0', 'important');
+    var content = b.scrollHeight || 0;
+    if (hOld) b.style.setProperty('height', hOld, hPri); else b.style.removeProperty('height');
+    if (mOld) b.style.setProperty('min-height', mOld, mPri); else b.style.removeProperty('min-height');
+    measuring = false;
+    var hOverflow = h && (h.scrollWidth - h.clientWidth) >= 4;
+    return Math.ceil(content) + BUFFER + (hOverflow ? H_SCROLLBAR : 0);
+  }
+  var last = 0;
+  function report() {
+    var hgt = measure();
+    if (hgt > 0 && Math.abs(hgt - last) >= 2) { last = hgt; window.parent.postMessage({ type: 'resize', height: hgt }, '*'); }
+  }
+  window.addEventListener('load', report);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(report);
+  if (window.ResizeObserver && document.body) new ResizeObserver(report).observe(document.body);
+})();
+</script>
+<script>
+(() => {
+  'use strict';
+
+  const MAXW   = 460;
+  const CYL_Y  = -0.8; // cylinder center in GlowScript coords
+
+  const canvas      = document.getElementById('c');
+  const ctx         = canvas.getContext('2d');
+  const Rslider     = document.getElementById('Rslider');
+  const Lslider     = document.getElementById('Lslider');
+  const thetaSlider = document.getElementById('thetaSlider');
+  const Rlabel      = document.getElementById('Rlabel');
+  const Llabel      = document.getElementById('Llabel');
+  const thetaLabel  = document.getElementById('thetaLabel');
+  const warning     = document.getElementById('warning');
+
+  let W, H, scale, ox, oy, dpr;
+
+  function layout() {
+    W     = Math.min(window.innerWidth || MAXW, MAXW);
+    H     = Math.round(W * 0.72);
+    scale = W / 3.5;   // scene range ≈ ±1.75 units visible
+    ox    = W / 2;
+    oy    = H * 0.52;  // GlowScript y=0 maps to slightly above canvas center
+    dpr   = window.devicePixelRatio || 1;
+    canvas.width  = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+    canvas.style.width  = W + 'px';
+    canvas.style.height = H + 'px';
+    document.body.style.width = W + 'px';
+  }
+
+  function gx(x) { return ox + x * scale; }
+  function gy(y) { return oy - y * scale; }
+
+  function draw() {
+    const R     = parseFloat(Rslider.value);
+    const L     = parseFloat(Lslider.value);
+    let   theta = parseFloat(thetaSlider.value);
+
+    let clamped = false;
+    if (R * theta > L / 2)  { theta = L / (2 * R); clamped = true; }
+    if (R * theta < -L / 2) { theta = -L / (2 * R); clamped = true; }
+    warning.textContent = clamped
+      ? "The stick can't roll that far. I've stopped moving it until theta gets closer to zero."
+      : '';
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, W, H);
+
+    // Cylinder (red circle)
+    ctx.beginPath();
+    ctx.arc(gx(0), gy(CYL_Y), R * scale, 0, 2 * Math.PI);
+    ctx.strokeStyle = '#e02424';
+    ctx.lineWidth   = 2;
+    ctx.stroke();
+    ctx.fillStyle   = 'rgba(220,50,50,0.15)';
+    ctx.fill();
+
+    // Contact point on cylinder surface at angle theta from top
+    const cpx = Math.sin(theta) * R;
+    const cpy = CYL_Y + Math.cos(theta) * R;
+
+    // Stick axis direction: perpendicular to the radius at contact = (cos(theta), -sin(theta))
+    const ax = Math.cos(theta);
+    const ay = -Math.sin(theta);
+
+    // Fraction along stick where contact occurs: f = R*theta/L + 0.5
+    const f = R * theta / L + 0.5;
+
+    // Stick start position: contact_point - f * L * axis
+    const stickX = cpx - f * L * ax;
+    const stickY = cpy - f * L * ay;
+
+    // Stick end
+    const stickEndX = stickX + L * ax;
+    const stickEndY = stickY + L * ay;
+
+    // Stick (blue line, drawn as thick rectangle)
+    const stickThickness = Math.max(2, scale * 0.025);
+    ctx.beginPath();
+    ctx.moveTo(gx(stickX), gy(stickY));
+    ctx.lineTo(gx(stickEndX), gy(stickEndY));
+    ctx.strokeStyle = '#1d4ed8';
+    ctx.lineWidth   = stickThickness;
+    ctx.lineCap     = 'round';
+    ctx.stroke();
+
+    // Center of mass (black dot at middle of stick)
+    const comX = stickX + L / 2 * ax;
+    const comY = stickY + L / 2 * ay;
+    const comR = Math.max(3, scale * 0.04);
+    ctx.beginPath();
+    ctx.arc(gx(comX), gy(comY), comR, 0, 2 * Math.PI);
+    ctx.fillStyle = '#111';
+    ctx.fill();
+
+    // Vertical axis line (z-axis reference)
+    ctx.beginPath();
+    ctx.moveTo(gx(0), gy(CYL_Y - 0.05));
+    ctx.lineTo(gx(0), gy(CYL_Y - R - 0.6));
+    ctx.strokeStyle = '#888';
+    ctx.lineWidth   = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  function update() {
+    Rlabel.textContent     = 'R: ' + parseFloat(Rslider.value).toFixed(2) + ' m';
+    Llabel.textContent     = 'L: ' + parseFloat(Lslider.value).toFixed(1) + ' m';
+    thetaLabel.textContent = 'θ: ' + parseFloat(thetaSlider.value).toFixed(2);
+    draw();
+  }
+
+  Rslider.addEventListener('input', update);
+  Lslider.addEventListener('input', update);
+  thetaSlider.addEventListener('input', update);
+  window.addEventListener('resize', () => { layout(); draw(); });
+
+  layout();
+  draw();
+})();
+</script>
+</body>
+</html>

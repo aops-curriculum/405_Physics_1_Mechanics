@@ -17,65 +17,44 @@
       * Kitty Hills: 8 control points, exactly 3 stable equilibrium points.
     Run ?selftest=1 and open the console to re-verify all of the above in-place.
   -->
-<script>
-// EigenNode auto-height v2.4
-(function() {
-  // 4px buffer for subpixel rounding + parent's >=3px noise threshold.
-  // Extra 18px when horizontal overflow forces a scrollbar (eats vertical
-  // space inside the iframe — AoPS classroom embeds in a narrower column
-  // than the 600px content, so a horizontal scrollbar appears and steals
-  // ~10-17px of height). Without this, the iframe ends up ~11-15px short.
-  var BUFFER = 4;
-  var H_SCROLLBAR = 18;
-  var measuring = false;
-  function measure() {
-    if (measuring) return 0;
-    var b = document.body, h = document.documentElement;
-    if (!b) return 0;
-    measuring = true;
-    // Temporarily neutralise body's height/min-height (overriding stylesheet
-    // rules with !important) so scrollHeight reflects actual content extent.
-    // Without this, patterns like body { height: 100vh } cause scrollHeight
-    // to echo the iframe's current viewport — adding BUFFER each cycle
-    // ratchets the iframe taller forever. Browser doesn't paint until this
-    // synchronous block returns, so no visible flicker.
-    var hOld = b.style.height, hPri = b.style.getPropertyPriority('height');
-    var mOld = b.style.minHeight, mPri = b.style.getPropertyPriority('min-height');
-    b.style.setProperty('height', 'auto', 'important');
-    b.style.setProperty('min-height', '0', 'important');
-    var content = b.scrollHeight || 0;
-    if (hOld) b.style.setProperty('height', hOld, hPri); else b.style.removeProperty('height');
-    if (mOld) b.style.setProperty('min-height', mOld, mPri); else b.style.removeProperty('min-height');
-    measuring = false;
-    // Check the documentElement only — that's the element that owns the
-    // iframe's horizontal scrollbar. Body can be narrower than the iframe
-    // (e.g. body{width:600px} centered in a 700px iframe) and have its own
-    // 1-2px overflow that doesn't actually trigger a scrollbar.
-    var hOverflow = h && (h.scrollWidth - h.clientWidth) >= 4;
-    return Math.ceil(content) + BUFFER + (hOverflow ? H_SCROLLBAR : 0);
-  }
-  var last = 0;
-  function report() {
-    var h = measure();
-    if (h > 0 && Math.abs(h - last) >= 2) {
-      last = h;
-      window.parent.postMessage({ type: 'resize', height: h }, '*');
-    }
-  }
-  window.addEventListener('load', report);
-  if (document.fonts && document.fonts.ready) document.fonts.ready.then(report);
-  if (window.ResizeObserver && document.body) new ResizeObserver(report).observe(document.body);
-})();
-</script>
+<!--
+  RESPONSIVE PRESENTATION. The physics, art, tools, URL params and grading are
+  unchanged from the original fixed-size build — only the *presentation*
+  differs: the whole sim (canvas + panel) is one fixed-size #stage that is
+  CSS-transform-scaled to fit whatever space the iframe is given, preserving
+  aspect ratio, centred, capped at a maximum size. The earlier fixed-pixel
+  layout + "auto-height v2.4" height-measuring snippet are replaced by the fit
+  controller near the bottom of the main script (search "RESPONSIVE FIT
+  CONTROLLER"). It still posts the parent { type:'resize', height } messages,
+  so inline (non-sticky) embeds auto-size to the sim with no grey gap, while a
+  fixed/draggable sticky box is filled by scale-to-fit. Tunable per embed with
+  ?maxw= / ?maxh= (CSS px) and ?maxscale=.
+-->
+
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; overflow: hidden; }
+    /* Body is the iframe viewport. The sim lives in #stage; the space around a
+       letter-boxed stage is transparent so it blends into the classroom
+       background instead of showing a grey box. */
     body {
-      width: 584px; height: 304px; overflow: hidden;
-      background: #eef2f6; display: flex;
+      position: relative; background: transparent;
       font-family: 'Segoe UI', system-ui, sans-serif;
       user-select: none; -webkit-user-select: none;
+      -webkit-text-size-adjust: 100%;
     }
-    body.clean { width: 384px; }
+    /* Fixed natural size (584x304, or 384 wide when the panel is hidden).
+       fitStage() scales this with transform to fill the viewport, centred,
+       preserving aspect ratio, capped at a maximum. Transform is presentation
+       only — it does not change offsetX/Y, so all pointer math is unchanged. */
+    #stage {
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%) scale(1);
+      transform-origin: center center; will-change: transform;
+      width: 584px; height: 304px; overflow: hidden;
+      display: flex; background: #eef2f6;
+    }
+    body.clean #stage { width: 384px; }
     body.clean #panel { display: none; }
     /* Locked MCH04 classroom preset: loads pre-configured (W track, standard
        start, speedometer on) with the setup/extra options hidden, leaving only
@@ -117,6 +96,7 @@
   </style>
 </head>
 <body>
+<div id="stage">
 <canvas id="c" width="600" height="500"></canvas>
 <div id="panel">
   <h1>Skate Park</h1>
@@ -147,6 +127,7 @@
     <button class="act" id="btnRestart">&#8635; Restart skater</button>
     <button class="act" id="btnReset">&#8634; Reset all</button>
   </div>
+</div>
 </div>
 <script>
 (() => {
@@ -436,10 +417,25 @@ const CW = 480, CH = 380;
 const CSS_W = 384, CSS_H = 304;
 const EVSCALE = CW / CSS_W;  // 1.25 — converts CSS-pixel event coords to logical canvas coords
 const dpr = window.devicePixelRatio || 1;
-canvas.width = CW * dpr; canvas.height = CH * dpr;
 canvas.style.width = CSS_W + 'px'; canvas.style.height = CSS_H + 'px';
 canvas.style.touchAction = 'none';   // prevent browser scroll/gesture on touch devices
-ctx.scale(dpr, dpr);
+// Canvas backing-store resolution. The fit controller CSS-scales the whole
+// stage; when it is enlarged (scale > 1) the 480x380 logical canvas would be
+// stretched and go soft, so setRes() raises the backing store to keep lines
+// and text crisp. `mult` = device pixels per logical unit; clamped to
+// [dpr, 3*dpr] so memory stays bounded. Drawing always uses 0..CW / 0..CH
+// logical coords (setTransform maps them onto the backing store), so no other
+// code changes when the resolution changes.
+let resMult = 0;
+function setRes(mult) {
+  mult = Math.max(dpr, Math.min(3 * dpr, mult));
+  if (Math.abs(mult - resMult) < 0.02) return;
+  resMult = mult;
+  canvas.width = Math.round(CW * mult);
+  canvas.height = Math.round(CH * mult);
+  ctx.setTransform(mult, 0, 0, mult, 0, 0);   // logical units -> backing pixels
+}
+setRes(dpr);
 const SCALE = 56, GROUND = 352, XSHIFT = 25; // px per m; ground line py; left-crop shift
 let vpZoom = 1, vpPX = 0, vpPY = 0;
 const w2x = wx => (wx * SCALE - CW/2) * vpZoom + CW/2 + vpPX - XSHIFT;
@@ -1210,8 +1206,51 @@ function runSelfTest() {
   return out;
 }
 
+// --- RESPONSIVE FIT CONTROLLER ----------------------------------------------
+// Scale #stage to fill the iframe viewport, preserving aspect ratio, centred,
+// capped at a maximum size. Also report a width-derived height to the parent
+// classroom so inline (non-sticky) embeds auto-size to the sim with no grey
+// gap; a fixed or draggable "sticky" box that ignores the report is simply
+// filled by scale-to-fit (letter-boxed only until its shape matches the sim's,
+// at which point the bottom of the box meets the bottom of the sim).
+const stage = document.getElementById('stage');
+// Maximum on-screen size so the sim never dominates the lesson feed. Tunable
+// per embed with ?maxw= / ?maxh= (CSS px) or ?maxscale= (hard scale cap).
+const MAXW = qNum('maxw', 860);          // px — widest the sim may render
+const MAXH = qNum('maxh', 560);          // px — tallest the sim may render
+const MAXSCALE = qNum('maxscale', 2.4);  // absolute cap on the zoom factor
+let lastReport = 0;
+function fitStage() {
+  const natW = stage.offsetWidth || (CLEAN ? 384 : 584);   // untransformed layout size
+  const natH = stage.offsetHeight || 304;
+  const vw = document.documentElement.clientWidth;
+  const vh = document.documentElement.clientHeight;
+  const cap = Math.min(MAXSCALE, MAXW / natW, MAXH / natH);
+  // Width-derived height: ask the parent to size the iframe to exactly hold the
+  // sim at the current width (capped). Depends only on width, so it can't feed
+  // back through the height it sets — no oscillation.
+  const sWidth = Math.min(vw / natW, cap);
+  const reportH = Math.max(1, Math.round(natH * sWidth));
+  if (Math.abs(reportH - lastReport) >= 2) {
+    lastReport = reportH;
+    try { window.parent.postMessage({ type: 'resize', height: reportH }, '*'); } catch (e) {}
+  }
+  // Actual fit uses whatever height the viewport currently has (a sticky box
+  // may be taller or shorter than the report we sent).
+  let s = Math.min(vw / natW, vh / natH, cap);
+  if (!isFinite(s) || s <= 0) s = sWidth;   // first paint, before the parent honours the report
+  stage.style.transform = 'translate(-50%, -50%) scale(' + s + ')';
+  setRes(s * dpr);                          // keep the canvas crisp when enlarged
+}
+window.addEventListener('resize', fitStage);
+window.addEventListener('orientationchange', fitStage);
+if (window.ResizeObserver) new ResizeObserver(fitStage).observe(document.documentElement);
+window.addEventListener('load', fitStage);
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitStage);
+
 // --- Boot ----------------------------------------------------------------
 initFromParams();
+fitStage();
 if (qFlag('selftest', false)) setTimeout(runSelfTest, 50);
 requestAnimationFrame(frame);
 })();

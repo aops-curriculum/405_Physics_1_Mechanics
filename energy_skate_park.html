@@ -70,12 +70,12 @@
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      width: 800px; height: 500px; overflow: hidden;
+      width: 584px; height: 304px; overflow: hidden;
       background: #eef2f6; display: flex;
       font-family: 'Segoe UI', system-ui, sans-serif;
       user-select: none; -webkit-user-select: none;
     }
-    body.clean { width: 600px; }
+    body.clean { width: 384px; }
     body.clean #panel { display: none; }
     /* Locked MCH04 classroom preset: loads pre-configured (W track, standard
        start, speedometer on) with the setup/extra options hidden, leaving only
@@ -85,11 +85,11 @@
     body.mch04 #fricRow, body.mch04 #massrow, body.mch04 #btnReset,
     body.mch04 #lblBars, body.mch04 #lblGrid, body.mch04 #lblRef,
     body.mch04 #lblStick { display: none !important; }
-    canvas { display: block; flex: 0 0 600px; }
+    canvas { display: block; flex: 0 0 384px; }
     #panel {
-      flex: 1 1 auto; width: 200px; height: 500px; padding: 7px 9px 5px;
+      flex: 1 1 auto; width: 200px; height: 304px; padding: 7px 9px 5px;
       background: #f3f6f9; border-left: 1px solid #d4dde5;
-      font-size: 11.5px; color: #2c3e50; overflow: hidden;
+      font-size: 11.5px; color: #2c3e50; overflow-y: auto; overflow-x: hidden;
     }
     #panel h1 { font-size: 15px; color: #1d3557; margin-bottom: 4px; font-weight: 600; }
     .seclbl { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
@@ -432,17 +432,19 @@ if (!ctx.roundRect) ctx.roundRect = function (x, y, w, h, r) {   // older-browse
   this.arcTo(x + w, y + h, x, y + h, r); this.arcTo(x, y + h, x, y, r);
   this.arcTo(x, y, x + w, y, r); this.closePath();
 };
-const CW = 600, CH = 500;
+const CW = 480, CH = 380;
+const CSS_W = 384, CSS_H = 304;
+const EVSCALE = CW / CSS_W;  // 1.25 — converts CSS-pixel event coords to logical canvas coords
 const dpr = window.devicePixelRatio || 1;
 canvas.width = CW * dpr; canvas.height = CH * dpr;
-canvas.style.width = CW + 'px'; canvas.style.height = CH + 'px';
+canvas.style.width = CSS_W + 'px'; canvas.style.height = CSS_H + 'px';
 canvas.style.touchAction = 'none';   // prevent browser scroll/gesture on touch devices
 ctx.scale(dpr, dpr);
-const SCALE = 56, GROUND = 472;          // px per m; ground line py
+const SCALE = 56, GROUND = 352, XSHIFT = 25; // px per m; ground line py; left-crop shift
 let vpZoom = 1, vpPX = 0, vpPY = 0;
-const w2x = wx => (wx * SCALE - CW/2) * vpZoom + CW/2 + vpPX;
+const w2x = wx => (wx * SCALE - CW/2) * vpZoom + CW/2 + vpPX - XSHIFT;
 const w2y = wy => (GROUND - wy * SCALE - CH/2) * vpZoom + CH/2 + vpPY;
-const x2w = px => ((px - vpPX - CW/2) / vpZoom + CW/2) / SCALE;
+const x2w = px => ((px + XSHIFT - vpPX - CW/2) / vpZoom + CW/2) / SCALE;
 const y2w = py => (GROUND - CH/2 - (py - vpPY - CH/2) / vpZoom) / SCALE;
 
 // --- URL parameters ----------------------------------------------------------
@@ -461,8 +463,8 @@ if (LESSON === 'mch04') document.body.classList.add('mch04');
 let trackKey, pts, track, st, g, fric, stick, paused, slow, charType, lastDrop;
 let showBars, showSpeed, showGrid, showRef, showTape, showWatch;
 let refY = 0, placedOnce = false, selPt = 0;
-let watch = { x: 490, y: 140, run: false, t: 0 };
-let tape = { x1: 9.8, y1: 0, x2: 9.8, y2: 1.4 };
+let watch = { x: 189, y: 140, run: false, t: 0 };
+let tape = { x1: 1.5, y1: 0.1, x2: 1.5, y2: 1.5 };
 let barScale = 800;       // J full-scale, smoothed
 let acc = 0, lastTs = null;
 
@@ -535,8 +537,8 @@ function initFromParams() {
   paused = qFlag('paused', LESSON === 'mch04');   // MCH04 loads paused at the standard start
   refY = qNum('ref', 0);
   showRef = Q.has('ref');
-  watch = { x: 490, y: 140, run: false, t: 0 };
-  tape = { x1: 9.8, y1: 0, x2: 9.8, y2: 1.4 };
+  watch = { x: 189, y: 140, run: false, t: 0 };
+  tape = { x1: 1.5, y1: 0.1, x2: 1.5, y2: 1.5 };
   placedOnce = false;
   barScale = 800;
   const startQ = Q.get('start') || (LESSON === 'mch04' ? 'std' : null);
@@ -684,12 +686,12 @@ function drawRefLine() {
   ctx.setLineDash([]); ctx.restore();
   // handle
   ctx.beginPath();
-  ctx.moveTo(206, py - 9); ctx.lineTo(218, py); ctx.lineTo(206, py + 9); ctx.lineTo(194, py);
+  ctx.moveTo(165, py - 9); ctx.lineTo(174, py); ctx.lineTo(165, py + 9); ctx.lineTo(155, py);
   ctx.closePath();
   ctx.fillStyle = '#0e7c7b'; ctx.fill();
   ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
   ctx.fillStyle = '#0e7c7b'; ctx.font = '11px Segoe UI'; ctx.textAlign = 'left';
-  ctx.fillText('reference height ' + refY.toFixed(2) + ' m', 228, py - 5);
+  ctx.fillText('reference height ' + refY.toFixed(2) + ' m', 183, py - 5);
 }
 
 function drawSkaterFigure(px, py, ang, face, ghost) {
@@ -813,7 +815,7 @@ function drawBars() {
 }
 
 function drawDial() {
-  const cx = 536, cy = 66, r = 44;
+  const cx = 235, cy = 66, r = 44;
   const spd = st.mode === 'air' ? Math.hypot(st.vx, st.vy) : (st.mode === 'drag' ? 0 : Math.abs(st.v));
   ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2 * Math.PI);
   ctx.fillStyle = 'rgba(255,255,255,0.95)'; ctx.fill();
@@ -907,17 +909,17 @@ function drawWatch() {
   ctx.fillText('↺', x + 65, y + 47.5);
 }
 
-const PLAY = { x: 300, y: 477, r: 16 }, STEP = { x: 338, y: 477, r: 11 };
-const RAD_N = { x: 170, y: 477 }, RAD_S = { x: 238, y: 477 };
-const ZOOM_M = { x: 385, y: 477, r: 10 }, ZOOM_P = { x: 413, y: 477, r: 10 };
+const PLAY = { x: 250, y: 363, r: 16 }, STEP = { x: 280, y: 363, r: 11 };
+const RAD_N = { x: 105, y: 363 }, RAD_S = { x: 183, y: 363 };
+const ZOOM_M = { x: 320, y: 363, r: 10 }, ZOOM_P = { x: 345, y: 363, r: 10 };
 function drawTransport() {
   // slow-motion radios
   for (const [rd, lbl, on] of [[RAD_N, 'Normal', !slow], [RAD_S, 'Slow', slow]]) {
     ctx.beginPath(); ctx.arc(rd.x, rd.y, 6, 0, 2 * Math.PI);
     ctx.fillStyle = '#fff'; ctx.fill(); ctx.strokeStyle = '#2f6fb3'; ctx.lineWidth = 1.6; ctx.stroke();
     if (on) { ctx.beginPath(); ctx.arc(rd.x, rd.y, 3.2, 0, 2 * Math.PI); ctx.fillStyle = '#2f6fb3'; ctx.fill(); }
-    ctx.fillStyle = '#fff'; ctx.font = '11.5px Segoe UI'; ctx.textAlign = 'left';
-    ctx.fillText(lbl, rd.x + 10, rd.y + 4);
+    ctx.fillStyle = '#fff'; ctx.font = '14.4px Segoe UI'; ctx.textAlign = 'left';
+    ctx.fillText(lbl, rd.x + 10, rd.y + 5);
   }
   // play/pause
   ctx.beginPath(); ctx.arc(PLAY.x, PLAY.y, PLAY.r, 0, 2 * Math.PI);
@@ -983,7 +985,7 @@ function hitSkater(mx, my) {
   return Math.hypot(mx - w2x(st.x), my - (w2y(st.y) - 20)) < 32;
 }
 canvas.addEventListener('pointerdown', e => {
-  const mx = e.offsetX, my = e.offsetY;
+  const mx = e.offsetX * EVSCALE, my = e.offsetY * EVSCALE;
   canvas.setPointerCapture(e.pointerId);
   // transport
   if (!HIDEHUD) {
@@ -993,8 +995,8 @@ canvas.addEventListener('pointerdown', e => {
       else for (let i = 0; i < 4; i++) doSubstep();
       return;
     }
-    if (Math.hypot(mx - RAD_N.x, my - RAD_N.y) < 9 || (mx > RAD_N.x && mx < RAD_N.x + 56 && Math.abs(my - RAD_N.y) < 9)) { slow = false; return; }
-    if (Math.hypot(mx - RAD_S.x, my - RAD_S.y) < 9 || (mx > RAD_S.x && mx < RAD_S.x + 40 && Math.abs(my - RAD_S.y) < 9)) { slow = true; return; }
+    if (Math.hypot(mx - RAD_N.x, my - RAD_N.y) < 9 || (mx > RAD_N.x && mx < RAD_N.x + 70 && Math.abs(my - RAD_N.y) < 9)) { slow = false; return; }
+    if (Math.hypot(mx - RAD_S.x, my - RAD_S.y) < 9 || (mx > RAD_S.x && mx < RAD_S.x + 50 && Math.abs(my - RAD_S.y) < 9)) { slow = true; return; }
     if (Math.hypot(mx - ZOOM_M.x, my - ZOOM_M.y) < ZOOM_M.r + 4) {
       const nz = Math.max(0.35, vpZoom / 1.25); const r = nz / vpZoom; vpPX *= r; vpPY *= r; vpZoom = nz; return;
     }
@@ -1017,7 +1019,7 @@ canvas.addEventListener('pointerdown', e => {
     if (Math.hypot(mx - w2x(tape.x1), my - w2y(tape.y1)) < 12) { dragKind = 'tape1'; return; }
   }
   // reference height handle
-  if (showRef && Math.abs(my - w2y(refY)) < 12 && mx > 186 && mx < 226) { dragKind = 'ref'; return; }
+  if (showRef && Math.abs(my - w2y(refY)) < 12 && mx > 155 && mx < 178) { dragKind = 'ref'; return; }
   // control points
   if (PRESETS[trackKey].editable) {
     for (let i = pts.length - 1; i >= 0; i--) {
@@ -1036,12 +1038,12 @@ canvas.addEventListener('pointerdown', e => {
   dragKind = 'pan'; panDraftX = mx; panDraftY = my; dragOff = { x: vpPX - mx, y: vpPY - my };
 });
 canvas.addEventListener('pointermove', e => {
-  const mx = e.offsetX, my = e.offsetY;
+  const mx = e.offsetX * EVSCALE, my = e.offsetY * EVSCALE;
   if (!dragKind) {
     let hov = hitSkater(mx, my) ||
       (showWatch && mx > watch.x && mx < watch.x + 92 && my > watch.y && my < watch.y + 58) ||
       (showTape && (Math.hypot(mx - w2x(tape.x2), my - w2y(tape.y2)) < 12 || Math.hypot(mx - w2x(tape.x1), my - w2y(tape.y1)) < 12)) ||
-      (showRef && Math.abs(my - w2y(refY)) < 12 && mx > 186 && mx < 226);
+      (showRef && Math.abs(my - w2y(refY)) < 12 && mx > 155 && mx < 178);
     if (PRESETS[trackKey].editable)
       for (const p of pts) if (Math.hypot(mx - w2x(p[0]), my - w2y(p[1])) < 12) hov = true;
     canvas.style.cursor = (hov || vpZoom !== 1) ? 'grab' : 'default';
@@ -1096,13 +1098,13 @@ canvas.addEventListener('wheel', e => {
   const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
   const newZoom = Math.max(0.35, Math.min(8, vpZoom * factor));
   const f = newZoom / vpZoom;
-  vpPX = (e.offsetX - CW/2) * (1 - f) + f * vpPX;
-  vpPY = (e.offsetY - CH/2) * (1 - f) + f * vpPY;
+  vpPX = (e.offsetX * EVSCALE - CW/2) * (1 - f) + f * vpPX;
+  vpPY = (e.offsetY * EVSCALE - CH/2) * (1 - f) + f * vpPY;
   vpZoom = newZoom;
 }, { passive: false });
 canvas.addEventListener('dblclick', e => {
   // Don't reset zoom when double-clicking interactive elements (avoids cancelling stopwatch button etc.)
-  const mx = e.offsetX, my = e.offsetY;
+  const mx = e.offsetX * EVSCALE, my = e.offsetY * EVSCALE;
   if (showWatch && mx > watch.x && mx < watch.x + 92 && my > watch.y && my < watch.y + 58) return;
   if (!HIDEHUD && Math.hypot(mx - PLAY.x, my - PLAY.y) < PLAY.r + 8) return;
   vpZoom = 1; vpPX = 0; vpPY = 0;

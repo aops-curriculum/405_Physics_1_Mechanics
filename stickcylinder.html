@@ -84,17 +84,26 @@
   let W, H, scale, ox, oy, dpr;
 
   function layout() {
-    W     = Math.min(window.innerWidth || MAXW, MAXW);
-    H     = Math.round(W * 0.72);
-    scale = W / 3.5;   // scene range ≈ ±1.75 units visible
-    ox    = W / 2;
-    oy    = H * 0.18;  // GlowScript y=0 maps near top; content (y≈-0.8) centres in canvas
-    dpr   = window.devicePixelRatio || 1;
+    W   = Math.min(window.innerWidth || MAXW, MAXW);
+    H   = Math.round(W * 0.72);
+    dpr = window.devicePixelRatio || 1;
     canvas.width  = Math.round(W * dpr);
     canvas.height = Math.round(H * dpr);
     canvas.style.width  = W + 'px';
     canvas.style.height = H + 'px';
     document.body.style.width = W + 'px';
+  }
+
+  // Fit all scene points into the canvas with padding fraction PAD on each side.
+  function autoFit(allX, allY) {
+    const PAD = 0.12;
+    const xMin = Math.min(...allX), xMax = Math.max(...allX);
+    const yMin = Math.min(...allY), yMax = Math.max(...allY);
+    const xRange = Math.max(xMax - xMin, 0.1);
+    const yRange = Math.max(yMax - yMin, 0.1);
+    scale = Math.min(W * (1 - 2 * PAD) / xRange, H * (1 - 2 * PAD) / yRange);
+    ox = W / 2 - (xMin + xMax) / 2 * scale;
+    oy = H / 2 + (yMin + yMax) / 2 * scale; // y-flip: gy(y) = oy - y*scale
   }
 
   function gx(x) { return ox + x * scale; }
@@ -111,6 +120,20 @@
     warning.textContent = clamped
       ? "The stick can't roll that far. I've stopped moving it until theta gets closer to zero."
       : '';
+
+    // Compute geometry for bounding box
+    const cpx0 = Math.sin(theta) * R;
+    const cpy0 = CYL_Y + Math.cos(theta) * R;
+    const ax0  = Math.cos(theta), ay0 = -Math.sin(theta);
+    const f0   = R * theta / L + 0.5;
+    const sX0  = cpx0 - f0 * L * ax0, sY0 = cpy0 - f0 * L * ay0;
+    const eX0  = sX0 + L * ax0,        eY0 = sY0 + L * ay0;
+    const axisBottom = CYL_Y - R - 0.6;
+
+    autoFit(
+      [sX0, eX0, -R, R],
+      [sY0, eY0, CYL_Y + R, axisBottom]
+    );
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
@@ -167,7 +190,7 @@
     // Vertical axis line (z-axis reference)
     ctx.beginPath();
     ctx.moveTo(gx(0), gy(CYL_Y - 0.05));
-    ctx.lineTo(gx(0), gy(CYL_Y - R - 0.6));
+    ctx.lineTo(gx(0), gy(axisBottom));
     ctx.strokeStyle = '#888';
     ctx.lineWidth   = 1;
     ctx.setLineDash([4, 4]);

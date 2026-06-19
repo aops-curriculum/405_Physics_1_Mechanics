@@ -107,6 +107,7 @@
     <button data-t="u">U Valley</button><button data-t="w">W Track</button>
     <button data-t="ramp">Ramp</button><button data-t="steps">Steps</button>
     <button data-t="kitty">Kitty Hills</button><button data-t="build">Build</button>
+    <button data-t="float" style="grid-column:1/-1">Float Ramps</button>
   </div>
   <div id="buildRow"><button id="addPt">+ point</button><button id="delPt">&minus; point</button></div>
   <div class="seclbl">Tools</div>
@@ -225,10 +226,24 @@ function closestOnTrack(tr, px, py) {
   return { s: tr.S[best], dist: Math.sqrt(bd), idx: best };
 }
 
+// --- Straight-line segment (2-point track: κ=0 everywhere) -------------------
+function linearSample(p0, p1) {
+  var dx = p1[0] - p0[0], dy = p1[1] - p0[1];
+  var len = Math.hypot(dx, dy) || 1e-9, tx = dx / len, ty = dy / len;
+  var N = 40, X = [], Y = [], S = [], TX = [], TY = [], K = [];
+  for (var i = 0; i <= N; i++) {
+    var t = i / N;
+    X.push(p0[0] + dx * t); Y.push(p0[1] + dy * t);
+    S.push(len * t); TX.push(tx); TY.push(ty); K.push(0);
+  }
+  return { pts: [p0, p1], X: X, Y: Y, S: S, TX: TX, TY: TY, K: K, n: N + 1, total: len };
+}
+
 // --- Skater stepping ---------------------------------------------------------
 function newSkater() {
   return { mode: 'air', s: 0, v: 0, x: 1.6, y: 0, vx: 0, vy: 0,
-           eth: 0, em0: 0, angle: 0, face: 1, airT: 0, prevD: 1 };
+           eth: 0, em0: 0, angle: 0, face: 1, airT: 0, prevD: 1,
+           segIdx: 0, segPrevD: [] };
 }
 function placeOnTrack(st, tr, s, g) {
   var q = trackQuery(tr, s);
@@ -238,16 +253,18 @@ function placeOnTrack(st, tr, s, g) {
 function placeInAir(st, x, y, g) {
   st.mode = 'air'; st.x = x; st.y = y; st.vx = 0; st.vy = 0;
   st.eth = 0; st.em0 = g * y; st.airT = 0; st.prevD = 1; st.angle = 0;
+  st.segPrevD = [];
 }
 function detach(st, tr, g) {
   var q = trackQuery(tr, st.s);
   st.mode = 'air';
   st.x = q.x - q.ty * 0.012; st.y = q.y + q.tx * 0.012;
   st.vx = st.v * q.tx; st.vy = st.v * q.ty;
-  st.airT = 0; st.prevD = 1;
+  st.airT = 0; st.prevD = 1; st.segPrevD = [];
 }
 // One physics substep. Returns event string or null.
-function stepSkater(st, tr, dt, g, b, stick) {
+// segs: optional array of segment track objects for multi-segment air landing.
+function stepSkater(st, tr, dt, g, b, stick, segs) {
   if (st.mode === 'track') {
     var s = st.s, v = st.v;
     function f(s_, v_) { var q = trackQuery(tr, s_); return [v_, -g * q.ty - b * v_]; }
@@ -291,21 +308,43 @@ function stepSkater(st, tr, dt, g, b, stick) {
       st.em0 = 0.5 * st.v * st.v + st.eth;
       return 'land-ground';
     }
-    if (st.airT > 0.04 && tr) {              // land on the track (from the +n side)
-      var c = closestOnTrack(tr, st.x, st.y);
-      var q2 = trackQuery(tr, c.s);
-      var d = (st.x - q2.x) * (-q2.ty) + (st.y - q2.y) * q2.tx;  // signed side
-      var vn = st.vx * (-q2.ty) + st.vy * q2.tx;
-      if (st.prevD > 0 && d <= 0 && c.dist < 0.6 && vn < 0 &&
-          c.s > 1e-6 && c.s < tr.total - 1e-6) {
-        var vt = st.vx * q2.tx + st.vy * q2.ty;
-        st.eth += 0.5 * vn * vn;             // inelastic impact -> thermal
-        st.mode = 'track'; st.s = c.s; st.v = vt;
-        st.em0 = 0.5 * vt * vt + g * q2.y + st.eth;
-        st.x = q2.x; st.y = q2.y; st.angle = Math.atan2(q2.ty, q2.tx);
-        return 'land-track';
+    if (st.airT > 0.04) {                    // land on the track (from the +n side)
+      if (segs) {
+        for (var si = 0; si < segs.length; si++) {
+          var seg = segs[si];
+          var c = closestOnTrack(seg, st.x, st.y);
+          var q2 = trackQuery(seg, c.s);
+          var d = (st.x - q2.x) * (-q2.ty) + (st.y - q2.y) * q2.tx;
+          var vn = st.vx * (-q2.ty) + st.vy * q2.tx;
+          var prevD = st.segPrevD[si] !== undefined ? st.segPrevD[si] : 1;
+          if (prevD > 0 && d <= 0 && c.dist < 0.6 && vn < 0 &&
+              c.s > 1e-6 && c.s < seg.total - 1e-6) {
+            var vt = st.vx * q2.tx + st.vy * q2.ty;
+            st.eth += 0.5 * vn * vn;         // inelastic impact -> thermal
+            st.mode = 'track'; st.s = c.s; st.v = vt; st.segIdx = si;
+            st.em0 = 0.5 * vt * vt + g * q2.y + st.eth;
+            st.x = q2.x; st.y = q2.y; st.angle = Math.atan2(q2.ty, q2.tx);
+            st.segPrevD = [];
+            return 'land-track';
+          }
+          st.segPrevD[si] = d;
+        }
+      } else if (tr) {
+        var c = closestOnTrack(tr, st.x, st.y);
+        var q2 = trackQuery(tr, c.s);
+        var d = (st.x - q2.x) * (-q2.ty) + (st.y - q2.y) * q2.tx;  // signed side
+        var vn = st.vx * (-q2.ty) + st.vy * q2.tx;
+        if (st.prevD > 0 && d <= 0 && c.dist < 0.6 && vn < 0 &&
+            c.s > 1e-6 && c.s < tr.total - 1e-6) {
+          var vt = st.vx * q2.tx + st.vy * q2.ty;
+          st.eth += 0.5 * vn * vn;           // inelastic impact -> thermal
+          st.mode = 'track'; st.s = c.s; st.v = vt;
+          st.em0 = 0.5 * vt * vt + g * q2.y + st.eth;
+          st.x = q2.x; st.y = q2.y; st.angle = Math.atan2(q2.ty, q2.tx);
+          return 'land-track';
+        }
+        st.prevD = d;
       }
-      st.prevD = d;
     }
     return null;
   }
@@ -374,7 +413,8 @@ function countStableEquilibria(tr, prominence) {
 }
 if (typeof module !== 'undefined') module.exports = {
   MASS: MASS, FRICTION_SCALE: FRICTION_SCALE, SUBDT: SUBDT,
-  catmullSample: catmullSample, trackQuery: trackQuery, closestOnTrack: closestOnTrack,
+  linearSample: linearSample, catmullSample: catmullSample,
+  trackQuery: trackQuery, closestOnTrack: closestOnTrack,
   newSkater: newSkater, placeOnTrack: placeOnTrack, placeInAir: placeInAir,
   stepSkater: stepSkater, lapTime: lapTime, sAtHeight: sAtHeight,
   countStableEquilibria: countStableEquilibria
@@ -404,7 +444,18 @@ const PRESETS = {
   kitty: { pts: [[0.4, 5.7], [1.4, 2.8], [2.5, 0.85], [4.0, 2.75], [5.3, 1.5],
                  [6.5, 3.95], [7.4, 3.0], [8.4, 3.65]],
            std: { s: 0.001 } },
-  build: { pts: [[1.2, 4.5], [3.4, 0.8], [5.8, 0.8], [8.2, 3.8]], editable: true }
+  build: { pts: [[1.2, 4.5], [3.4, 0.8], [5.8, 0.8], [8.2, 3.8]], editable: true },
+  // MCH05 floating ramps: 4 disconnected straight-line segments, visually matching the
+  // original PhET staircase. Ramps 1+2 calibrated at g=10, stick off (see file header).
+  float: {
+    segments: [
+      [[0.4, 4.65], [3.8, 3.724]],    // Ramp 1: Δy=0.926m → v_launch=4.303 m/s, KE=555 J
+      [[4.55, 2.77], [7.00, 3.194]],  // Ramp 2: v_far-edge=2.200 m/s, KE=145 J
+      [[7.40, 1.45], [8.90, 1.65]],   // Ramp 3 (visual)
+      [[8.85, 0.40], [9.90, 0.20]]    // Ramp 4 (visual)
+    ],
+    defG: 10, defStick: false, autoStd: true, std: { s: 0.001 }
+  }
 };
 
 // --- Canvas / world ----------------------------------------------------------
@@ -458,7 +509,7 @@ const LESSON = Q.get('lesson') || '';
 if (LESSON === 'mch04') document.body.classList.add('mch04');
 
 // --- State ---------------------------------------------------------------
-let trackKey, pts, track, st, g, fric, stick, paused, slow, charType, lastDrop;
+let trackKey, pts, track, segs, st, g, fric, stick, paused, slow, charType, lastDrop;
 let showBars, showSpeed, showGrid, showRef, showTape, showWatch;
 let refY = 0, placedOnce = false, selPt = 0;
 let watch = { x: 189, y: 140, run: false, t: 0 };
@@ -466,11 +517,20 @@ let tape = { x1: 1.5, y1: 0.1, x2: 1.5, y2: 1.5 };
 let barScale = 800;       // J full-scale, smoothed
 let acc = 0, lastTs = null;
 
-function rebuild() { track = catmullSample(pts, 70); }
+function rebuild() {
+  const P = PRESETS[trackKey];
+  if (P && P.segments) {
+    segs = P.segments.map(s => linearSample(s[0], s[1]));
+    track = segs[0];
+  } else {
+    segs = null;
+    track = catmullSample(pts, 70);
+  }
+}
 function setTrack(key, init) {
   trackKey = key;
   const P = PRESETS[key];
-  pts = P.pts.map(p => [p[0], p[1]]);
+  pts = P.pts ? P.pts.map(p => [p[0], p[1]]) : [];
   rebuild();
   selPt = pts.length - 1;
   document.querySelectorAll('#trackBtns button').forEach(b =>
@@ -485,6 +545,13 @@ function setTrack(key, init) {
 function placeStd() {
   const P = PRESETS[trackKey];
   if (!P.std) { standOnGround(1.5); return; }
+  if (segs) {
+    st.segIdx = 0;
+    placeOnTrack(st, segs[0], Math.max(P.std.s !== undefined ? P.std.s : 0.001, 0.001), g);
+    lastDrop = { kind: 'track', s: st.s, segIdx: 0 };
+    placedOnce = true;
+    return;
+  }
   const s = P.std.s !== undefined ? P.std.s : sAtHeight(track, P.std.y);
   placeOnTrack(st, track, Math.max(s, 0.001), g);
   lastDrop = { kind: 'track', s: st.s };
@@ -511,10 +578,14 @@ function setFric(val) {
   document.getElementById('fVal').textContent = fric.toFixed(3);
 }
 function restartSkater() {
-  st.eth = 0;
+  st.eth = 0; st.segPrevD = [];
   if (!lastDrop) { standOnGround(1.5); return; }
-  if (lastDrop.kind === 'track') placeOnTrack(st, track, Math.min(lastDrop.s, track.total - 0.001), g);
-  else if (lastDrop.kind === 'air') placeInAir(st, lastDrop.x, lastDrop.y, g);
+  if (lastDrop.kind === 'track') {
+    const si = lastDrop.segIdx !== undefined ? lastDrop.segIdx : 0;
+    const tr2 = segs ? segs[si] : track;
+    if (segs) st.segIdx = si;
+    placeOnTrack(st, tr2, Math.min(lastDrop.s, tr2.total - 0.001), g);
+  } else if (lastDrop.kind === 'air') placeInAir(st, lastDrop.x, lastDrop.y, g);
   else standOnGround(lastDrop.x);
 }
 function initFromParams() {
@@ -552,6 +623,24 @@ function initFromParams() {
 }
 function releaseSkaterAt(wx, wy) {
   wx = Math.min(10.6, Math.max(0.05, wx)); wy = Math.min(8.2, Math.max(0, wy));
+  if (segs) {
+    let bestDist = Infinity, bestSeg = 0, bestS = 0.001;
+    for (let i = 0; i < segs.length; i++) {
+      const c = closestOnTrack(segs[i], wx, wy);
+      if (c.dist < bestDist) { bestDist = c.dist; bestSeg = i; bestS = c.s; }
+    }
+    if (bestDist < 0.45) {
+      st.segIdx = bestSeg;
+      placeOnTrack(st, segs[bestSeg], Math.min(Math.max(bestS, 0.001), segs[bestSeg].total - 0.001), g);
+      lastDrop = { kind: 'track', s: st.s, segIdx: bestSeg };
+    } else if (wy < 0.06) {
+      standOnGround(wx);
+    } else {
+      placeInAir(st, wx, wy, g);
+      lastDrop = { kind: 'air', x: wx, y: wy };
+    }
+    return;
+  }
   const c = closestOnTrack(track, wx, wy);
   if (c.dist < 0.45) {
     placeOnTrack(st, track, Math.min(Math.max(c.s, 0.001), track.total - 0.001), g);
@@ -642,7 +731,30 @@ function sIdx(tr, s) {
   return lo;
 }
 
+function drawFloatingSegs() {
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  const gap = 0.42, period = DASH + gap;
+  for (let si = 0; si < segs.length; si++) {
+    const seg = segs[si];
+    ctx.beginPath();
+    ctx.moveTo(w2x(seg.X[0]), w2y(seg.Y[0]));
+    for (let i = 1; i < seg.n; i++) ctx.lineTo(w2x(seg.X[i]), w2y(seg.Y[i]));
+    ctx.strokeStyle = '#6e6e6e'; ctx.lineWidth = 11; ctx.stroke();
+    ctx.strokeStyle = '#a3a3a3'; ctx.lineWidth = 7.5; ctx.stroke();
+    ctx.strokeStyle = '#3c3c3c'; ctx.lineWidth = 1.8;
+    for (let a = gap; a < seg.total; a += period) {
+      const b = Math.min(a + DASH, seg.total);
+      const qa = trackQuery(seg, a), qb = trackQuery(seg, b);
+      ctx.beginPath(); ctx.moveTo(w2x(qa.x), w2y(qa.y));
+      for (let i = sIdx(seg, a) + 1; i < seg.n && seg.S[i] < b; i++)
+        ctx.lineTo(w2x(seg.X[i]), w2y(seg.Y[i]));
+      ctx.lineTo(w2x(qb.x), w2y(qb.y)); ctx.stroke();
+    }
+  }
+}
+
 function drawTrack() {
+  if (segs) { drawFloatingSegs(); return; }
   // ribbon
   ctx.lineJoin = 'round'; ctx.lineCap = 'round';
   ctx.beginPath();
@@ -762,11 +874,24 @@ function drawSkaterFigure(px, py, ang, face, ghost) {
 
 function drawSkater() {
   if (st.mode === 'drag') {
-    const c = closestOnTrack(track, st.x, st.y);
-    if (c.dist < 0.45) {     // snap preview
-      const q = trackQuery(track, c.s);
-      ctx.beginPath(); ctx.arc(w2x(q.x), w2y(q.y), 5.5, 0, 2 * Math.PI);
-      ctx.fillStyle = 'rgba(230,51,41,0.45)'; ctx.fill();
+    if (segs) {
+      let bestDist = Infinity, bestSeg = 0, bestS = 0;
+      for (let i = 0; i < segs.length; i++) {
+        const c = closestOnTrack(segs[i], st.x, st.y);
+        if (c.dist < bestDist) { bestDist = c.dist; bestSeg = i; bestS = c.s; }
+      }
+      if (bestDist < 0.45) {
+        const q = trackQuery(segs[bestSeg], bestS);
+        ctx.beginPath(); ctx.arc(w2x(q.x), w2y(q.y), 5.5, 0, 2 * Math.PI);
+        ctx.fillStyle = 'rgba(230,51,41,0.45)'; ctx.fill();
+      }
+    } else {
+      const c = closestOnTrack(track, st.x, st.y);
+      if (c.dist < 0.45) {   // snap preview
+        const q = trackQuery(track, c.s);
+        ctx.beginPath(); ctx.arc(w2x(q.x), w2y(q.y), 5.5, 0, 2 * Math.PI);
+        ctx.fillStyle = 'rgba(230,51,41,0.45)'; ctx.fill();
+      }
     }
     drawSkaterFigure(w2x(st.x), w2y(st.y), 0, st.face, true);
     return;
@@ -774,7 +899,7 @@ function drawSkater() {
   drawSkaterFigure(w2x(st.x), w2y(st.y), st.angle, st.face, false);
 }
 
-const BARS_X = 6, BARS_Y = 6, BARS_W = 150, BARS_H = 192, BARS_ZERO = BARS_Y + 140;
+const BARS_X = 6, BARS_Y = 182, BARS_W = 150, BARS_H = 192, BARS_ZERO = BARS_Y + 140;
 function drawBars() {
   const e = energies();
   // smooth full-scale: track the run's total mechanical energy
@@ -960,7 +1085,14 @@ function drawHints() {
 // --- Simulation loop -----------------------------------------------------
 function doSubstep() {
   const b = fric * FRICTION_SCALE;
-  stepSkater(st, track, SUBDT, g, (st.mode === 'track' || st.mode === 'ground') ? b : 0, stick);
+  if (segs) {
+    const tr2 = st.mode === 'track' ? segs[st.segIdx] : null;
+    stepSkater(st, tr2, SUBDT, g,
+               (st.mode === 'track' || st.mode === 'ground') ? b : 0, stick,
+               st.mode === 'air' ? segs : null);
+  } else {
+    stepSkater(st, track, SUBDT, g, (st.mode === 'track' || st.mode === 'ground') ? b : 0, stick);
+  }
   if (watch.run) watch.t += SUBDT;
 }
 function frame(ts) {
@@ -1204,6 +1336,30 @@ function runSelfTest() {
   const r1 = runSteps(0.0089);
   chk('steps launch speed at friction 0.0089', +r1.L[0].sp.toFixed(3), 3.69, 3.71);
   chk('steps stop-at-edge gap (m, vs lip x=' + r0.L[1].x.toFixed(2) + ')', +(r1.turn - r0.L[1].x).toFixed(3), -0.12, 0.05);
+  // 5. floating ramps scenario at g=10, stick off
+  const fsTr = PRESETS.float.segments.map(s => linearSample(s[0], s[1]));
+  const runFloat = f => {
+    const stt = newSkater(); stt.segIdx = 0; stt.segPrevD = [];
+    placeOnTrack(stt, fsTr[0], 0.001, 10);
+    let t = 0, L = [];
+    while (t < 25) {
+      const tr2 = stt.mode === 'track' ? fsTr[stt.segIdx] : null;
+      const b2 = stt.mode === 'track' ? f * FRICTION_SCALE : 0;
+      const ev2 = stepSkater(stt, tr2, SUBDT, 10, b2, false,
+                              stt.mode === 'air' ? fsTr : null);
+      t += SUBDT;
+      if (ev2 === 'left-end') L.push({ x: stt.x, sp: Math.hypot(stt.vx, stt.vy) });
+      if (L.length >= 2 || stt.mode === 'ground' || stt.y < -0.5) break;
+    }
+    return { L };
+  };
+  const rf0 = runFloat(0);
+  chk('float-ramps launch speed, frictionless (m/s)', +rf0.L[0].sp.toFixed(3), 4.295, 4.310);
+  chk('float-ramps launch KE label (J)', Math.round(30 * rf0.L[0].sp * rf0.L[0].sp), 555, 555);
+  chk('float-ramps far-edge speed, frictionless (m/s)', +rf0.L[1].sp.toFixed(3), 2.19, 2.21);
+  chk('float-ramps far-edge KE label (J)', Math.round(30 * rf0.L[1].sp * rf0.L[1].sp), 145, 145);
+  const rf1 = runFloat(0.0089);
+  chk('float-ramps friction=0.0089 launch (m/s)', +rf1.L[0].sp.toFixed(3), 3.69, 3.71);
   console.log('Skate Park calibration self-test\n' + out.join('\n'));
   return out;
 }
@@ -1268,6 +1424,23 @@ initFromParams();
 fitStage();
 if (qFlag('selftest', false)) setTimeout(runSelfTest, 50);
 requestAnimationFrame(frame);
+// Debug helpers exposed for capture scripts
+window.__espStep = () => { for (let i = 0; i < 4; i++) doSubstep(); draw(); };
+window.__espSteps = (n) => { for (let i = 0; i < n; i++) { for (let j = 0; j < 4; j++) doSubstep(); } draw(); };
+window.__espPause = () => { paused = true; draw(); };
+window.__espUnpause = () => { paused = false; };
+window.__espGetState = () => ({ mode: st.mode, s: st.s, v: st.v, x: st.x, y: st.y, vx: st.vx, vy: st.vy, eth: st.eth, segIdx: st.segIdx });
+window.__espCanvas = () => document.querySelector('canvas').toDataURL('image/png');
+window.__espCanvasJpeg = (q) => document.querySelector('canvas').toDataURL('image/jpeg', q || 0.92);
+window.__espDownload = (filename, mime, quality) => {
+  const canvas = document.querySelector('canvas');
+  canvas.toBlob(blob => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, mime || 'image/png', quality || 0.92);
+};
 })();
 </script>
 </body>

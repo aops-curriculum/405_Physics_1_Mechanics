@@ -95,6 +95,12 @@
     #massrow { color: #5d6f80; margin-top: 4px; }
     .bigbtns { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
     .bigbtns button { padding: 4px 0; font-size: 11.5px; }
+    #mag {
+      position: fixed; z-index: 1000; pointer-events: none; display: none;
+      border: 2px solid #222; border-radius: 5px; background: #fff;
+      image-rendering: pixelated;
+      box-shadow: 0 3px 12px rgba(0,0,0,0.45);
+    }
   </style>
 </head>
 <body>
@@ -132,6 +138,7 @@
   </div>
 </div>
 </div>
+<canvas id="mag" width="128" height="128"></canvas>
 <script>
 (() => {
 'use strict';
@@ -507,6 +514,7 @@ if (CLEAN) document.body.classList.add('clean');
 // hides the options that aren't part of that lesson, so a class needs no setup.
 const LESSON = Q.get('lesson') || '';
 if (LESSON === 'mch04') document.body.classList.add('mch04');
+const SHOWMAG = qFlag('mag', false);
 
 // --- State ---------------------------------------------------------------
 let trackKey, pts, track, segs, st, g, fric, stick, paused, slow, charType, lastDrop;
@@ -1108,6 +1116,37 @@ function frame(ts) {
   requestAnimationFrame(frame);
 }
 
+// --- Magnifier -------------------------------------------------------------
+// Shown only while dragging a tape-measure endpoint (?mag=1 to enable).
+const mag = document.getElementById('mag');
+const magCtx = mag.getContext('2d');
+magCtx.imageSmoothingEnabled = false;
+const MAG_HALF = 24; // half-side of source in backing-store pixels (~38 screen px at 1×)
+function updateMag(mx, my, clientX, clientY) {
+  // mx, my are logical canvas coords (0..CW × 0..CH)
+  const bsX = Math.round(mx * resMult), bsY = Math.round(my * resMult);
+  let sx = bsX - MAG_HALF, sy = bsY - MAG_HALF, sw = MAG_HALF * 2, sh = MAG_HALF * 2;
+  if (sx < 0) { sw += sx; sx = 0; }
+  if (sy < 0) { sh += sy; sy = 0; }
+  if (sx + sw > canvas.width) sw = canvas.width - sx;
+  if (sy + sh > canvas.height) sh = canvas.height - sy;
+  if (sw <= 0 || sh <= 0) { mag.style.display = 'none'; return; }
+  magCtx.fillStyle = '#fff'; magCtx.fillRect(0, 0, 128, 128);
+  magCtx.imageSmoothingEnabled = false;
+  magCtx.drawImage(canvas, sx, sy, sw, sh, 0, 0, 128, 128);
+  magCtx.strokeStyle = 'rgba(230,51,41,0.9)'; magCtx.lineWidth = 1;
+  magCtx.beginPath();
+  magCtx.moveTo(56, 64); magCtx.lineTo(72, 64);
+  magCtx.moveTo(64, 56); magCtx.lineTo(64, 72);
+  magCtx.stroke();
+  const pad = 18;
+  let lx = clientX + pad, ly = clientY + pad;
+  if (lx + 128 > window.innerWidth) lx = clientX - pad - 128;
+  if (ly + 128 > window.innerHeight) ly = clientY - pad - 128;
+  mag.style.left = lx + 'px'; mag.style.top = ly + 'px';
+  mag.style.display = 'block';
+}
+
 // --- Pointer interaction ---------------------------------------------------
 let dragKind = null, dragOff = { x: 0, y: 0 };
 let panDraftX = 0, panDraftY = 0;
@@ -1193,6 +1232,7 @@ canvas.addEventListener('pointermove', e => {
       tape.x2 = wx; tape.y2 = wy;
       if (Math.abs(tape.x2 - tape.x1) < 0.07) tape.x2 = tape.x1;   // vertical assist
     }
+    if (SHOWMAG) updateMag(mx, my, e.clientX, e.clientY);
   } else if (dragKind === 'ref') {
     refY = Math.min(8, Math.max(0, y2w(my)));
   } else if (dragKind.startsWith('cp')) {
@@ -1217,6 +1257,7 @@ function endDrag(e) {
     releaseSkaterAt(st.x, st.y);
     placedOnce = true;
   }
+  if (SHOWMAG) mag.style.display = 'none';
   dragKind = null;
   canvas.style.cursor = 'default';
 }
@@ -1571,6 +1612,12 @@ window.__espDownload = (filename, mime, quality) => {
         "type": "toggle",
         "default": 0,
         "desc": "Hide HUD overlays"
+    },
+    {
+        "name": "mag",
+        "type": "toggle",
+        "default": 0,
+        "desc": "Show magnifier while dragging tape-measure endpoints"
     },
     {
         "name": "dots",

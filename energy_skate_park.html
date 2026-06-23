@@ -1232,7 +1232,11 @@ canvas.addEventListener('pointermove', e => {
       tape.x2 = wx; tape.y2 = wy;
       if (Math.abs(tape.x2 - tape.x1) < 0.07) tape.x2 = tape.x1;   // vertical assist
     }
-    if (SHOWMAG) updateMag(mx, my, e.clientX, e.clientY);
+    if (SHOWMAG) {
+      const ex = dragKind === 'tape1' ? w2x(tape.x1) : w2x(tape.x2);
+      const ey = dragKind === 'tape1' ? w2y(tape.y1) : w2y(tape.y2);
+      updateMag(ex, ey, e.clientX, e.clientY);
+    }
   } else if (dragKind === 'ref') {
     refY = Math.min(8, Math.max(0, y2w(my)));
   } else if (dragKind.startsWith('cp')) {

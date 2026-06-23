@@ -114,6 +114,7 @@
     <button data-t="ramp">Ramp</button><button data-t="steps">Steps</button>
     <button data-t="kitty">Kitty Hills</button><button data-t="build">Build</button>
     <button data-t="float" style="grid-column:1/-1">Float Ramps</button>
+    <button data-t="draw" id="btnDrawTrack" style="grid-column:1/-1; display:none">Draw Track</button>
   </div>
   <div id="buildRow"><button id="addPt">+ point</button><button id="delPt">&minus; point</button></div>
   <div class="seclbl">Tools</div>
@@ -462,8 +463,15 @@ const PRESETS = {
       [[8.85, 0.40], [9.90, 0.20]]    // Ramp 4 (visual)
     ],
     defG: 10, defStick: false, autoStd: true, std: { s: 0.001 }
-  }
+  },
+  // PhET-style segment builder (?drawtrack=1). Like `float`, the track is a set of
+  // straight-line `segs`, but here the pieces are user-editable: drag them in from
+  // the toolbox, join them at the endpoints, drag them out to delete. The geometry
+  // lives in the module-level `drawSegs`, so rebuild() handles it specially.
+  draw: { segmentsEditable: true, std: { s: 0.001 } }
 };
+const MAX_DRAW_SEGS = 12;        // cap on user-drawn pieces
+const SNAP_M = 0.30;             // endpoint join radius (m)
 
 // --- Canvas / world ----------------------------------------------------------
 const canvas = document.getElementById('c');
@@ -516,11 +524,18 @@ const LESSON = Q.get('lesson') || '';
 if (LESSON === 'mch04') document.body.classList.add('mch04');
 const SHOWMAG = qFlag('mag', false);
 const SHOWXDOT = qFlag('xdot', false);
+// PhET-style segment builder: drag track pieces from a toolbox, join them at the
+// endpoints, drag a piece back to the toolbox to delete it. Off by default.
+const DRAWTRACK = qFlag('drawtrack', false);
 
 // --- State ---------------------------------------------------------------
 let trackKey, pts, track, segs, st, g, fric, stick, paused, slow, charType, lastDrop;
 let showBars, showSpeed, showGrid, showRef, showTape, showWatch;
 let refY = 0, placedOnce = false, selPt = 0;
+// Draw-track (segment builder) state. drawSegs is the editable source of truth —
+// an array of [[x0,y0],[x1,y1]] point-pairs that rebuild() turns into `segs`.
+const DRAW_START = () => [[[1.2, 4.2], [4.0, 1.2]]];   // one starter ramp
+let drawSegs = DRAW_START(), selSeg = 0, dragSegOff = null, overToolbox = false;
 let watch = { x: 189, y: 140, run: false, t: 0 };
 let tape = { x1: 1.5, y1: 0.1, x2: 1.5, y2: 1.5 };
 let barScale = 800;       // J full-scale, smoothed
@@ -528,7 +543,10 @@ let acc = 0, lastTs = null;
 
 function rebuild() {
   const P = PRESETS[trackKey];
-  if (P && P.segments) {
+  if (trackKey === 'draw') {
+    segs = drawSegs.map(s => linearSample(s[0], s[1]));
+    track = segs.length ? segs[0] : null;
+  } else if (P && P.segments) {
     segs = P.segments.map(s => linearSample(s[0], s[1]));
     track = segs[0];
   } else {
@@ -553,7 +571,7 @@ function setTrack(key, init) {
 }
 function placeStd() {
   const P = PRESETS[trackKey];
-  if (!P.std) { standOnGround(1.5); return; }
+  if (!P.std || (segs && !segs.length)) { standOnGround(1.5); return; }
   if (segs) {
     st.segIdx = 0;
     placeOnTrack(st, segs[0], Math.max(P.std.s !== undefined ? P.std.s : 0.001, 0.001), g);
@@ -600,7 +618,16 @@ function restartSkater() {
 function initFromParams() {
   st = newSkater();
   charType = (Q.get('char') === 'cat') ? 'cat' : 'emilie';
-  const tk = PRESETS[Q.get('track')] ? Q.get('track') : (LESSON === 'mch04' ? 'w' : 'u');
+  // The draw track is only reachable when ?drawtrack=1; otherwise it's hidden and
+  // a stray ?track=draw falls back to the normal default.
+  drawSegs = DRAW_START();
+  document.getElementById('btnDrawTrack').style.display = DRAWTRACK ? '' : 'none';
+  const reqTrack = Q.get('track');
+  let tk;
+  if (reqTrack === 'draw') tk = DRAWTRACK ? 'draw' : (LESSON === 'mch04' ? 'w' : 'u');
+  else if (PRESETS[reqTrack]) tk = reqTrack;
+  else if (DRAWTRACK) tk = 'draw';                 // ?drawtrack=1 alone starts in build mode
+  else tk = (LESSON === 'mch04' ? 'w' : 'u');
   setTrack(tk, true);
   const P = PRESETS[tk];
   g = 9.8; setG(qNum('g', P.defG !== undefined ? P.defG : 9.8));
@@ -697,6 +724,7 @@ function draw() {
 
   if (showRef) drawRefLine();
   drawTrack();
+  if (PRESETS[trackKey].segmentsEditable) drawSegToolbox();
   drawSkater();
   if (showBars) drawBars();
   if (showSpeed) drawDial();
@@ -760,6 +788,48 @@ function drawFloatingSegs() {
       ctx.lineTo(w2x(qb.x), w2y(qb.y)); ctx.stroke();
     }
   }
+  // draggable endpoint handles when the track is being built
+  if (PRESETS[trackKey].segmentsEditable) {
+    for (let si = 0; si < drawSegs.length; si++) {
+      for (let e = 0; e < 2; e++) {
+        const px = w2x(drawSegs[si][e][0]), py = w2y(drawSegs[si][e][1]);
+        ctx.beginPath(); ctx.arc(px, py, 7, 0, 2 * Math.PI);
+        ctx.fillStyle = '#d62828'; ctx.fill();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = (si === selSeg) ? '#ffd166' : '#ffffff';
+        ctx.stroke();
+        ctx.beginPath(); ctx.arc(px - 2.1, py - 2.3, 1.9, 0, 2 * Math.PI);
+        ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.fill();
+      }
+    }
+  }
+}
+
+// Track-piece toolbox (PhET-style): drag a piece out to add a segment, drag a
+// segment back over the box to delete it. Drawn only while building a draw track.
+const TOOLBOX = { x: 6, y: 6, w: 104, h: 50 };
+function inToolbox(mx, my) {
+  return PRESETS[trackKey].segmentsEditable &&
+    mx >= TOOLBOX.x && mx <= TOOLBOX.x + TOOLBOX.w &&
+    my >= TOOLBOX.y && my <= TOOLBOX.y + TOOLBOX.h;
+}
+function drawSegToolbox() {
+  const t = TOOLBOX;
+  ctx.fillStyle = overToolbox ? 'rgba(255,225,225,0.96)' : 'rgba(255,255,255,0.92)';
+  ctx.strokeStyle = overToolbox ? '#d9542e' : '#b9c6d2'; ctx.lineWidth = overToolbox ? 2 : 1;
+  ctx.beginPath(); ctx.roundRect(t.x, t.y, t.w, t.h, 6); ctx.fill(); ctx.stroke();
+  const cx = t.x + t.w / 2, my = t.y + 21;
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = '#6e6e6e'; ctx.lineWidth = 9;
+  ctx.beginPath(); ctx.moveTo(cx - 27, my + 6); ctx.lineTo(cx + 27, my - 6); ctx.stroke();
+  ctx.strokeStyle = '#a3a3a3'; ctx.lineWidth = 5.5;
+  ctx.beginPath(); ctx.moveTo(cx - 27, my + 6); ctx.lineTo(cx + 27, my - 6); ctx.stroke();
+  ctx.fillStyle = '#d62828';
+  for (const ep of [[cx - 27, my + 6], [cx + 27, my - 6]]) {
+    ctx.beginPath(); ctx.arc(ep[0], ep[1], 3.4, 0, 2 * Math.PI); ctx.fill();
+  }
+  ctx.fillStyle = overToolbox ? '#d9542e' : '#5d6f80'; ctx.font = '9px Segoe UI'; ctx.textAlign = 'center';
+  ctx.fillText(overToolbox ? 'drop here to delete' : 'drag to add track', cx, t.y + t.h - 5);
 }
 
 function drawTrack() {
@@ -1095,6 +1165,12 @@ function drawHints() {
     ctx.fillText('Drag ' + (charType === 'cat' ? 'the cat' : 'Emilie') + ' onto the track', w2x(st.x), w2y(st.y) - 58);
   if (PRESETS[trackKey].editable)
     ctx.fillText('Drag the red dots to shape the track', 300, 20);
+  if (PRESETS[trackKey].segmentsEditable) {
+    const msg = drawSegs.length
+      ? 'Drag a piece from the toolbox; drag the red dots to join pieces'
+      : 'Drag a track piece from the toolbox to start building';
+    ctx.fillText(msg, CW / 2 + 40, 150);
+  }
 }
 
 // --- Simulation loop -----------------------------------------------------
@@ -1160,6 +1236,32 @@ let panDraftX = 0, panDraftY = 0;
 function hitSkater(mx, my) {
   return Math.hypot(mx - w2x(st.x), my - (w2y(st.y) - 20)) < 32;
 }
+// world-coord clamps shared by segment endpoints (same bounds as control points)
+const clampX = wx => Math.min(10.5, Math.max(0.2, wx));
+const clampY = wy => Math.min(8.2, Math.max(0.05, wy));
+// distance (canvas px) from point to line segment, for grabbing a piece by its body
+function distToSeg(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy;
+  let t = L2 ? ((px - ax) * dx + (py - ay) * dy) / L2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (ax + dx * t), py - (ay + dy * t));
+}
+// keep a track-riding skater glued to the geometry while the track is reshaped
+function syncSkaterToTrack() {
+  if (st.mode !== 'track') return;
+  const tr2 = segs ? segs[st.segIdx] : track;
+  if (!tr2) { standOnGround(Math.min(10, Math.max(0.3, st.x))); return; }
+  st.s = Math.min(st.s, tr2.total - 0.001);
+  const q = trackQuery(tr2, st.s);
+  st.x = q.x; st.y = q.y; st.em0 = 0.5 * st.v * st.v + g * q.y + st.eth;
+}
+// remove the draw segment at index i, keeping the skater on solid footing
+function deleteDrawSeg(i) {
+  drawSegs.splice(i, 1);
+  selSeg = Math.max(0, Math.min(selSeg, drawSegs.length - 1));
+  rebuild();
+  if (st.mode === 'track') standOnGround(Math.min(10, Math.max(0.3, st.x)));
+}
 canvas.addEventListener('pointerdown', e => {
   const mx = e.offsetX * EVSCALE, my = e.offsetY * EVSCALE;
   canvas.setPointerCapture(e.pointerId);
@@ -1196,6 +1298,27 @@ canvas.addEventListener('pointerdown', e => {
   }
   // reference height handle
   if (showRef && Math.abs(my - w2y(refY)) < 12 && mx > 155 && mx < 178) { dragKind = 'ref'; return; }
+  // draw-track: toolbox spawns a new piece; endpoint handles reshape/join pieces
+  if (PRESETS[trackKey].segmentsEditable) {
+    if (inToolbox(mx, my)) {
+      if (drawSegs.length < MAX_DRAW_SEGS) {
+        const wx = clampX(x2w(mx)), wy = clampY(Math.max(0.3, y2w(my)));
+        drawSegs.push([[wx - 0.8, wy + 0.22], [wx + 0.8, wy - 0.22]]);
+        selSeg = drawSegs.length - 1;
+        rebuild();
+        dragKind = 'segbody:' + selSeg;
+        dragSegOff = drawSegs[selSeg].map(p => [p[0] - wx, p[1] - wy]);
+      }
+      return;
+    }
+    for (let i = drawSegs.length - 1; i >= 0; i--) {
+      for (let e = 0; e < 2; e++) {
+        if (Math.hypot(mx - w2x(drawSegs[i][e][0]), my - w2y(drawSegs[i][e][1])) < 12) {
+          dragKind = 'ep:' + i + ':' + e; selSeg = i; return;
+        }
+      }
+    }
+  }
   // control points
   if (PRESETS[trackKey].editable) {
     for (let i = pts.length - 1; i >= 0; i--) {
@@ -1210,6 +1333,18 @@ canvas.addEventListener('pointerdown', e => {
     st.x = x2w(mx); st.y = Math.max(0, y2w(my));
     return;
   }
+  // draw-track: grab a piece by its body to move the whole segment
+  if (PRESETS[trackKey].segmentsEditable) {
+    for (let i = drawSegs.length - 1; i >= 0; i--) {
+      const a = drawSegs[i][0], b = drawSegs[i][1];
+      if (distToSeg(mx, my, w2x(a[0]), w2y(a[1]), w2x(b[0]), w2y(b[1])) < 9) {
+        const wx = x2w(mx), wy = y2w(my);
+        dragKind = 'segbody:' + i; selSeg = i;
+        dragSegOff = drawSegs[i].map(p => [p[0] - wx, p[1] - wy]);
+        return;
+      }
+    }
+  }
   // pan (background drag) — requires 5px movement before activating to avoid accidental pans
   dragKind = 'pan'; panDraftX = mx; panDraftY = my; dragOff = { x: vpPX - mx, y: vpPY - my };
 });
@@ -1222,6 +1357,13 @@ canvas.addEventListener('pointermove', e => {
       (showRef && Math.abs(my - w2y(refY)) < 12 && mx > 155 && mx < 178);
     if (PRESETS[trackKey].editable)
       for (const p of pts) if (Math.hypot(mx - w2x(p[0]), my - w2y(p[1])) < 12) hov = true;
+    if (PRESETS[trackKey].segmentsEditable) {
+      if (inToolbox(mx, my)) hov = true;
+      for (const sg of drawSegs) {
+        for (const p of sg) if (Math.hypot(mx - w2x(p[0]), my - w2y(p[1])) < 12) hov = true;
+        if (distToSeg(mx, my, w2x(sg[0][0]), w2y(sg[0][1]), w2x(sg[1][0]), w2y(sg[1][1])) < 9) hov = true;
+      }
+    }
     canvas.style.cursor = (hov || vpZoom !== 1) ? 'grab' : 'default';
     return;
   }
@@ -1246,6 +1388,35 @@ canvas.addEventListener('pointermove', e => {
     }
   } else if (dragKind === 'ref') {
     refY = Math.min(8, Math.max(0, y2w(my)));
+  } else if (dragKind.startsWith('ep:')) {
+    const parts = dragKind.split(':'), i = +parts[1], e = +parts[2];
+    let wx = clampX(x2w(mx)), wy = clampY(y2w(my));
+    // snap to a free endpoint of another piece so segments join (PhET-style)
+    let bd = SNAP_M, snap = null;
+    for (let j = 0; j < drawSegs.length; j++) {
+      if (j === i) continue;
+      for (let k = 0; k < 2; k++) {
+        const d = Math.hypot(drawSegs[j][k][0] - wx, drawSegs[j][k][1] - wy);
+        if (d < bd) { bd = d; snap = drawSegs[j][k]; }
+      }
+    }
+    if (snap) { wx = snap[0]; wy = snap[1]; }
+    drawSegs[i][e] = [wx, wy];
+    overToolbox = inToolbox(mx, my);
+    rebuild(); syncSkaterToTrack();
+  } else if (dragKind.startsWith('segbody:')) {
+    const i = +dragKind.split(':')[1];
+    const wx = x2w(mx), wy = y2w(my);
+    let np = dragSegOff.map(o => [wx + o[0], wy + o[1]]);
+    // clamp by translating the whole piece (preserve its length and angle)
+    let sx = 0, sy = 0;
+    const minx = Math.min(np[0][0], np[1][0]), maxx = Math.max(np[0][0], np[1][0]);
+    const miny = Math.min(np[0][1], np[1][1]), maxy = Math.max(np[0][1], np[1][1]);
+    if (minx < 0.2) sx = 0.2 - minx; else if (maxx > 10.5) sx = 10.5 - maxx;
+    if (miny < 0.05) sy = 0.05 - miny; else if (maxy > 8.2) sy = 8.2 - maxy;
+    drawSegs[i] = np.map(p => [p[0] + sx, p[1] + sy]);
+    overToolbox = inToolbox(mx, my);
+    rebuild(); syncSkaterToTrack();
   } else if (dragKind.startsWith('cp')) {
     const i = +dragKind.slice(2);
     pts[i][0] = Math.min(10.5, Math.max(0.2, x2w(mx)));
@@ -1267,7 +1438,10 @@ function endDrag(e) {
   if (dragKind === 'skater') {
     releaseSkaterAt(st.x, st.y);
     placedOnce = true;
+  } else if (dragKind && (dragKind.startsWith('ep:') || dragKind.startsWith('segbody:'))) {
+    if (overToolbox) deleteDrawSeg(+dragKind.split(':')[1]);   // dropped on toolbox -> delete
   }
+  overToolbox = false; dragSegOff = null;
   if (SHOWMAG) mag.style.display = 'none';
   dragKind = null;
   canvas.style.cursor = 'default';
@@ -1516,10 +1690,11 @@ window.__espDownload = (filename, mime, quality) => {
             "steps",
             "kitty",
             "build",
-            "float"
+            "float",
+            "draw"
         ],
         "default": "u",
-        "desc": "Track preset"
+        "desc": "Track preset (draw requires drawtrack=1)"
     },
     {
         "name": "char",
@@ -1641,6 +1816,12 @@ window.__espDownload = (filename, mime, quality) => {
         "type": "toggle",
         "default": 0,
         "desc": "Show trail dots"
+    },
+    {
+        "name": "drawtrack",
+        "type": "toggle",
+        "default": 0,
+        "desc": "Enable PhET-style segment builder: drag track pieces from a toolbox, join them, drag out to delete"
     },
     {
         "name": "lesson",

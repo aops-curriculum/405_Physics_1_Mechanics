@@ -515,6 +515,7 @@ if (CLEAN) document.body.classList.add('clean');
 const LESSON = Q.get('lesson') || '';
 if (LESSON === 'mch04') document.body.classList.add('mch04');
 const SHOWMAG = qFlag('mag', false);
+const SHOWXDOT = qFlag('xdot', false);
 
 // --- State ---------------------------------------------------------------
 let trackKey, pts, track, segs, st, g, fric, stick, paused, slow, charType, lastDrop;
@@ -903,6 +904,12 @@ function drawSkater() {
     }
     drawSkaterFigure(w2x(st.x), w2y(st.y), 0, st.face, true);
     return;
+  }
+  if (SHOWXDOT) {
+    const gy = w2y(0);
+    ctx.beginPath(); ctx.arc(w2x(st.x), gy, 3.6, 0, 2 * Math.PI);
+    ctx.fillStyle = 'rgba(230,51,41,0.5)'; ctx.fill();
+    ctx.lineWidth = 1.2; ctx.strokeStyle = 'rgba(122,20,16,0.5)'; ctx.stroke();
   }
   drawSkaterFigure(w2x(st.x), w2y(st.y), st.angle, st.face, false);
 }
@@ -1622,6 +1629,12 @@ window.__espDownload = (filename, mime, quality) => {
         "type": "toggle",
         "default": 0,
         "desc": "Show magnifier while dragging tape-measure endpoints"
+    },
+    {
+        "name": "xdot",
+        "type": "toggle",
+        "default": 0,
+        "desc": "Show semi-transparent red dot on ground below skater (x-position marker)"
     },
     {
         "name": "dots",

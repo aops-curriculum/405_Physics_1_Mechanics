@@ -117,6 +117,7 @@
     <button data-t="draw" id="btnDrawTrack" style="grid-column:1/-1; display:none">Draw Track</button>
   </div>
   <div id="buildRow"><button id="addPt">+ point</button><button id="delPt">&minus; point</button></div>
+  <label class="cb" id="drawRow" style="display:none"><input type="checkbox" id="cbToolbox" checked> Show track toolbox</label>
   <div class="seclbl">Tools</div>
   <label class="cb" id="lblBars"><input type="checkbox" id="cbBars" checked> Energy bar chart</label>
   <label class="cb"><input type="checkbox" id="cbSpeed"> Speedometer</label>
@@ -524,13 +525,16 @@ const LESSON = Q.get('lesson') || '';
 if (LESSON === 'mch04') document.body.classList.add('mch04');
 const SHOWMAG = qFlag('mag', false);
 const SHOWXDOT = qFlag('xdot', false);
+// On-canvas instruction text ("Drag Emilie onto the track", etc). On by default;
+// ?hints=0 hides all of them for a clean classroom/screenshot view.
+const SHOWHINTS = qFlag('hints', true);
 // PhET-style segment builder: drag track pieces from a toolbox, join them at the
 // endpoints, drag a piece back to the toolbox to delete it. Off by default.
 const DRAWTRACK = qFlag('drawtrack', false);
 
 // --- State ---------------------------------------------------------------
 let trackKey, pts, track, segs, st, g, fric, stick, paused, slow, charType, lastDrop;
-let showBars, showSpeed, showGrid, showRef, showTape, showWatch;
+let showBars, showSpeed, showGrid, showRef, showTape, showWatch, showToolbox = true;
 let refY = 0, placedOnce = false, selPt = 0;
 // Draw-track (segment builder) state. drawSegs is the editable source of truth —
 // an array of [[x0,y0],[x1,y1]] point-pairs that rebuild() turns into `segs`.
@@ -563,6 +567,7 @@ function setTrack(key, init) {
   document.querySelectorAll('#trackBtns button').forEach(b =>
     b.classList.toggle('on', b.dataset.t === key));
   document.getElementById('buildRow').style.display = P.editable ? 'flex' : 'none';
+  document.getElementById('drawRow').style.display = P.segmentsEditable ? 'block' : 'none';
   if (!init) {
     if (P.defG !== undefined) setG(P.defG);
     if (P.defStick !== undefined) { stick = P.defStick; document.getElementById('cbStick').checked = stick; }
@@ -638,6 +643,7 @@ function initFromParams() {
   showGrid = qFlag('grid', false);
   showTape = qFlag('tape', false);
   showWatch = qFlag('watch', false);
+  showToolbox = true;            // draw-track toolbox starts visible; UI checkbox hides it
   slow = qFlag('slow', false);
   paused = qFlag('paused', LESSON === 'mch04');   // MCH04 loads paused at the standard start
   refY = qNum('ref', 0);
@@ -654,7 +660,8 @@ function initFromParams() {
     else standOnGround(1.5);
   } else standOnGround(1.5);
   for (const [id, val] of [['cbBars', showBars], ['cbSpeed', showSpeed], ['cbGrid', showGrid],
-       ['cbRef', showRef], ['cbTape', showTape], ['cbWatch', showWatch], ['cbStick', stick]])
+       ['cbRef', showRef], ['cbTape', showTape], ['cbWatch', showWatch], ['cbStick', stick],
+       ['cbToolbox', showToolbox]])
     document.getElementById(id).checked = val;
 }
 function releaseSkaterAt(wx, wy) {
@@ -724,7 +731,7 @@ function draw() {
 
   if (showRef) drawRefLine();
   drawTrack();
-  if (PRESETS[trackKey].segmentsEditable) drawSegToolbox();
+  if (PRESETS[trackKey].segmentsEditable && showToolbox) drawSegToolbox();
   drawSkater();
   if (showBars) drawBars();
   if (showSpeed) drawDial();
@@ -809,7 +816,7 @@ function drawFloatingSegs() {
 // segment back over the box to delete it. Drawn only while building a draw track.
 const TOOLBOX = { x: 6, y: 6, w: 104, h: 50 };
 function inToolbox(mx, my) {
-  return PRESETS[trackKey].segmentsEditable &&
+  return PRESETS[trackKey].segmentsEditable && showToolbox &&
     mx >= TOOLBOX.x && mx <= TOOLBOX.x + TOOLBOX.w &&
     my >= TOOLBOX.y && my <= TOOLBOX.y + TOOLBOX.h;
 }
@@ -1160,6 +1167,7 @@ function drawTransport() {
 }
 
 function drawHints() {
+  if (!SHOWHINTS) return;
   ctx.font = '11.5px Segoe UI'; ctx.fillStyle = '#7d97ad'; ctx.textAlign = 'center';
   if (!placedOnce && st.mode === 'ground' && Math.abs(st.v) < 0.01)
     ctx.fillText('Drag ' + (charType === 'cat' ? 'the cat' : 'Emilie') + ' onto the track', w2x(st.x), w2y(st.y) - 58);
@@ -1498,6 +1506,7 @@ bindCb('cbRef', v => showRef = v);
 bindCb('cbTape', v => showTape = v);
 bindCb('cbWatch', v => showWatch = v);
 bindCb('cbStick', v => stick = v);
+bindCb('cbToolbox', v => showToolbox = v);
 document.getElementById('slG').addEventListener('input', e => setG(+e.target.value));
 document.getElementById('slF').addEventListener('input', e => setFric(+e.target.value));
 document.getElementById('gMoon').addEventListener('click', () => setG(1.6));
@@ -1816,6 +1825,12 @@ window.__espDownload = (filename, mime, quality) => {
         "type": "toggle",
         "default": 0,
         "desc": "Show trail dots"
+    },
+    {
+        "name": "hints",
+        "type": "toggle",
+        "default": 1,
+        "desc": "Show on-canvas instruction text (e.g. \"Drag Emilie onto the track\"); set 0 to hide all hints"
     },
     {
         "name": "drawtrack",

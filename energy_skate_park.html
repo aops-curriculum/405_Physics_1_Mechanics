@@ -541,6 +541,7 @@ let refY = 0, placedOnce = false, selPt = 0;
 const DRAW_START = () => [[[1.2, 4.2], [4.0, 1.2]]];   // one starter ramp
 let drawSegs = DRAW_START(), selSeg = 0, dragSegOff = null, overToolbox = false;
 let watch = { x: 189, y: 140, run: false, t: 0 };
+let dial = { x: 235, y: 66 };       // speedometer center (px); draggable
 let tape = { x1: 1.5, y1: 0.1, x2: 1.5, y2: 1.5 };
 let barScale = 800;       // J full-scale, smoothed
 let acc = 0, lastTs = null;
@@ -649,6 +650,7 @@ function initFromParams() {
   refY = qNum('ref', 0);
   showRef = Q.has('ref');
   watch = { x: 189, y: 140, run: false, t: 0 };
+  dial = { x: 235, y: 66 };
   tape = { x1: 1.5, y1: 0.1, x2: 1.5, y2: 1.5 };
   placedOnce = false;
   barScale = 800;
@@ -1029,8 +1031,14 @@ function drawBars() {
   }
 }
 
+const DIAL_R = 44;
+// hit region for dragging the speedometer: the dial face or its readout box
+function hitDial(mx, my) {
+  return Math.hypot(mx - dial.x, my - dial.y) < DIAL_R + 4 ||
+    (mx > dial.x - 33 && mx < dial.x + 33 && my > dial.y + DIAL_R + 4 && my < dial.y + DIAL_R + 22);
+}
 function drawDial() {
-  const cx = 235, cy = 66, r = 44;
+  const cx = dial.x, cy = dial.y, r = DIAL_R;
   const spd = st.mode === 'air' ? Math.hypot(st.vx, st.vy) : (st.mode === 'drag' ? 0 : Math.abs(st.v));
   ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2 * Math.PI);
   ctx.fillStyle = 'rgba(255,255,255,0.95)'; ctx.fill();
@@ -1299,6 +1307,10 @@ canvas.addEventListener('pointerdown', e => {
       dragKind = 'watch'; dragOff = { x: mx - x, y: my - y }; return;
     }
   }
+  // speedometer (drag the dial to reposition it)
+  if (showSpeed && hitDial(mx, my)) {
+    dragKind = 'dial'; dragOff = { x: mx - dial.x, y: my - dial.y }; return;
+  }
   // tape handles
   if (showTape) {
     if (Math.hypot(mx - w2x(tape.x2), my - w2y(tape.y2)) < 12) { dragKind = 'tape2'; return; }
@@ -1361,6 +1373,7 @@ canvas.addEventListener('pointermove', e => {
   if (!dragKind) {
     let hov = hitSkater(mx, my) ||
       (showWatch && mx > watch.x && mx < watch.x + 92 && my > watch.y && my < watch.y + 58) ||
+      (showSpeed && hitDial(mx, my)) ||
       (showTape && (Math.hypot(mx - w2x(tape.x2), my - w2y(tape.y2)) < 12 || Math.hypot(mx - w2x(tape.x1), my - w2y(tape.y1)) < 12)) ||
       (showRef && Math.abs(my - w2y(refY)) < 12 && mx > 155 && mx < 178);
     if (PRESETS[trackKey].editable)
@@ -1382,6 +1395,9 @@ canvas.addEventListener('pointermove', e => {
   } else if (dragKind === 'watch') {
     watch.x = Math.min(CW - 94, Math.max(2, mx - dragOff.x));
     watch.y = Math.min(CH - 60, Math.max(2, my - dragOff.y));
+  } else if (dragKind === 'dial') {
+    dial.x = Math.min(CW - 46, Math.max(46, mx - dragOff.x));
+    dial.y = Math.min(312, Math.max(46, my - dragOff.y));
   } else if (dragKind === 'tape1' || dragKind === 'tape2') {
     const wx = Math.min(10.6, Math.max(0, x2w(mx))), wy = Math.min(8.3, Math.max(0, y2w(my)));
     if (dragKind === 'tape1') { tape.x1 = wx; tape.y1 = wy; }
@@ -1470,6 +1486,7 @@ canvas.addEventListener('dblclick', e => {
   // Don't reset zoom when double-clicking interactive elements (avoids cancelling stopwatch button etc.)
   const mx = e.offsetX * EVSCALE, my = e.offsetY * EVSCALE;
   if (showWatch && mx > watch.x && mx < watch.x + 92 && my > watch.y && my < watch.y + 58) return;
+  if (showSpeed && hitDial(mx, my)) return;
   if (!HIDEHUD && Math.hypot(mx - PLAY.x, my - PLAY.y) < PLAY.r + 8) return;
   vpZoom = 1; vpPX = 0; vpPY = 0;
 });

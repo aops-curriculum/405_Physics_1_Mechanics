@@ -1,0 +1,1599 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pixel Measure</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden}
+body{font-family:Arial,sans-serif;background:#1a1a1a;display:flex;flex-direction:row;align-items:stretch}
+
+/* ── Sidebar ─────────────────────────────────────────────────── */
+#sidebar{
+  width:240px;flex-shrink:0;
+  background:#252525;color:#ccc;
+  position:sticky;top:0;max-height:100vh;overflow-y:auto;
+  align-self:flex-start;
+  transition:width 0.18s;
+}
+#sidebar.hidden{width:0;overflow:hidden}
+
+#sidebar-header{
+  background:#1a1a1a;padding:8px 10px;
+  display:flex;align-items:center;justify-content:space-between;
+  flex-shrink:0;font-size:13px;font-weight:bold;color:#eee;
+  letter-spacing:.3px;
+}
+#sidebar-close{
+  background:none;border:none;color:#888;cursor:pointer;
+  font-size:18px;line-height:1;padding:0 3px;
+}
+#sidebar-close:hover{color:#fff}
+
+#sidebar-body{padding:10px 8px 16px;display:flex;flex-direction:column;gap:11px}
+
+.sec{display:flex;flex-direction:column;gap:5px}
+.sec-title{
+  font-size:10px;text-transform:uppercase;letter-spacing:.8px;
+  color:#666;border-bottom:1px solid #3a3a3a;padding-bottom:3px;
+}
+label.row{display:flex;align-items:center;gap:6px;font-size:12px;color:#bbb;cursor:pointer}
+label.col{display:flex;flex-direction:column;gap:2px;font-size:12px;color:#bbb}
+label.col .lbl{font-size:10px;color:#888}
+.threes{display:flex;gap:4px}
+.threes>label{flex:1;min-width:0}
+
+input[type=text],input[type=number],select{
+  width:100%;background:#333;border:1px solid #4a4a4a;
+  color:#ddd;padding:3px 6px;font-size:12px;border-radius:3px;outline:none;
+}
+input[type=text]:focus,input[type=number]:focus,select:focus{border-color:#4a9eff}
+input[type=checkbox]{width:14px;height:14px;accent-color:#4a9eff;cursor:pointer;flex-shrink:0}
+input[type=color]{padding:1px;height:24px;width:100%;cursor:pointer;border-radius:2px}
+
+.btn{
+  width:100%;border:none;border-radius:3px;
+  padding:5px 8px;font-size:12px;cursor:pointer;color:#fff;
+}
+.btn-blue{background:#4a9eff}.btn-blue:hover{background:#3a8eef}
+.btn-red{background:#c0392b}.btn-red:hover{background:#a93226}
+.btn-grey{background:#555}.btn-grey:hover{background:#666}
+.btn-green{background:#27ae60}.btn-green:hover{background:#1e8449}
+.btn-green.active{background:#a64 !important}
+
+#meas-list{
+  font-size:11px;font-family:monospace;color:#999;
+  max-height:130px;overflow-y:auto;
+  background:#1a1a1a;border-radius:3px;padding:4px 5px;min-height:22px;
+}
+.mitem{padding:2px 0;border-bottom:1px solid #2a2a2a;line-height:1.4}
+.mitem:last-child{border-bottom:none}
+#cal-info{font-size:10px;color:#777;font-style:italic}
+.hint{font-size:10px;color:#666;font-style:italic}
+
+/* ── Toggle button ─────────────────────────────────────────── */
+#panel-toggle{
+  position:fixed;top:7px;left:7px;z-index:300;
+  background:#333;color:#bbb;border:1px solid #555;
+  border-radius:4px;padding:3px 7px;font-size:12px;cursor:pointer;
+  line-height:1.4;
+}
+#panel-toggle:hover{background:#444;color:#fff}
+
+/* ── Main area ─────────────────────────────────────────────── */
+#main{
+  flex:1;min-width:0;min-height:0;
+  display:flex;flex-direction:column;align-items:stretch;
+  padding:0;gap:6px;
+}
+#main-title{font-size:15px;font-weight:bold;color:#333;display:none;text-align:center}
+/* Canvas-wrap fills the remaining space; the canvas fills the wrap and the
+   image is contain-fit inside it (resetView), so it fills the iframe with no
+   gray border when the iframe ≈ the image aspect. */
+#canvas-wrap{
+  flex:1;width:100%;min-height:0;
+  background:#1a1a1a;
+  line-height:0;cursor:crosshair;
+  overflow:hidden;
+}
+canvas#c{display:block;width:100%;height:100%}
+#statusbar{font-size:12px;color:#555;font-family:monospace;min-height:18px;text-align:center;white-space:nowrap}
+
+/* ── Zoom control bar ────────────────────────────────────────── */
+#zoom-ctrl-bar{
+  display:none;align-items:center;gap:6px;
+  background:#2a2a2a;border-radius:5px;
+  padding:4px 12px;color:#bbb;font-size:13px;
+}
+#zoom-ctrl-bar button{
+  background:#3a3a3a;border:1px solid #555;color:#ddd;
+  border-radius:3px;padding:2px 10px;cursor:pointer;font-size:15px;line-height:1.3;
+}
+#zoom-ctrl-bar button:hover{background:#4a4a4a;color:#fff}
+#zoom-display{min-width:52px;text-align:center;color:#7ab8ff;font-size:13px;
+  font-weight:bold;font-family:monospace}
+
+/* ── Floating magnifier ─────────────────────────────────────── */
+#mag{
+  position:fixed;z-index:1000;pointer-events:none;display:none;
+  border:2px solid #222;border-radius:5px;background:#fff;
+  image-rendering:pixelated;
+  box-shadow:0 3px 12px rgba(0,0,0,0.45);
+}
+
+/* ── Calibration status bar ─────────────────────────────────── */
+#calstatus{
+  position:fixed;bottom:26px;left:50%;transform:translateX(-50%);
+  background:rgba(20,70,20,0.93);color:#9f9;
+  padding:7px 18px;border-radius:6px;font-size:13px;
+  z-index:500;display:none;pointer-events:none;white-space:nowrap;
+}
+</style>
+</head>
+<body>
+
+<button id="panel-toggle" title="Toggle control panel">⚙</button>
+
+<!-- ── Sidebar ── -->
+<div id="sidebar">
+  <div id="sidebar-header">
+    ⚙ Control Panel
+    <button id="sidebar-close" title="Close panel">×</button>
+  </div>
+  <div id="sidebar-body">
+
+    <div class="sec">
+      <div class="sec-title">Image</div>
+      <label class="col"><span class="lbl">URL</span>
+        <input type="text" id="pi-image" placeholder="https://...">
+      </label>
+      <button class="btn btn-blue" id="btn-load">Load Image</button>
+    </div>
+
+    <div class="sec">
+      <div class="sec-title">Calibration</div>
+      <div class="threes">
+        <label class="col"><span class="lbl">Pixels</span>
+          <input type="number" id="pi-cal-px" min="1" placeholder="px">
+        </label>
+        <label class="col"><span class="lbl">Distance</span>
+          <input type="number" id="pi-cal-dist" min="0" step="any" placeholder="dist">
+        </label>
+        <label class="col"><span class="lbl">Unit</span>
+          <select id="pi-cal-unit">
+            <option value="ft">ft</option>
+            <option value="m">m</option>
+            <option value="cm">cm</option>
+            <option value="km">km</option>
+          </select>
+        </label>
+      </div>
+      <div id="cal-info">No calibration set</div>
+      <button class="btn btn-green" id="btn-cal-click">▶ Calibrate by clicking</button>
+      <span class="hint">Click two known points, enter the real distance</span>
+    </div>
+
+    <div class="sec">
+      <div class="sec-title">Display Unit</div>
+      <select id="pi-unit">
+        <option value="px">pixels (px)</option>
+        <option value="ft">feet – decimal</option>
+        <option value="ft_in">feet + inches</option>
+        <option value="m">meters (m)</option>
+        <option value="cm">centimeters (cm)</option>
+        <option value="km">kilometers (km)</option>
+      </select>
+    </div>
+
+    <div class="sec">
+      <div class="sec-title">Grid</div>
+      <label class="row">
+        <input type="checkbox" id="pi-grid-on"> Show grid
+      </label>
+      <div class="threes">
+        <label class="col"><span class="lbl">Spacing</span>
+          <input type="number" id="pi-grid-n" value="1" min="0.001" step="any">
+        </label>
+        <label class="col"><span class="lbl">Unit</span>
+          <select id="pi-grid-unit">
+            <option value="px">px</option>
+            <option value="ft">ft</option>
+            <option value="m">m</option>
+            <option value="cm">cm</option>
+            <option value="km">km</option>
+          </select>
+        </label>
+        <label class="col"><span class="lbl">Color</span>
+          <input type="color" id="pi-grid-color" value="#0064c8">
+        </label>
+      </div>
+    </div>
+
+    <div class="sec">
+      <div class="sec-title">Features</div>
+      <label class="row"><input type="checkbox" id="pi-mag" checked> Floating magnifier</label>
+      <label class="row"><input type="checkbox" id="pi-zoom" checked> Scroll to zoom &amp; alt-drag to pan</label>
+      <label class="row"><input type="checkbox" id="pi-zoomctrl"> Zoom control buttons</label>
+      <label class="row"><input type="checkbox" id="pi-single"> Single measurement (new drag replaces old)</label>
+      <label class="row"><input type="checkbox" id="pi-status" checked> Show status bar</label>
+      <label class="row"><input type="checkbox" id="pi-px-display"> Display pixels (match legacy sims — use with max_w=650)</label>
+    </div>
+
+    <div class="sec">
+      <div class="sec-title">Axes</div>
+      <label class="row"><input type="checkbox" id="pi-axes"> Show axes</label>
+      <label class="col">
+        <span class="lbl">Origin (x,y in image px, or "center")</span>
+        <input type="text" id="pi-origin" placeholder="0,0">
+      </label>
+    </div>
+
+    <div class="sec">
+      <div class="sec-title">Title</div>
+      <input type="text" id="pi-title" placeholder="(optional heading above image)">
+    </div>
+
+    <div class="sec">
+      <div class="sec-title">Measurements</div>
+      <div id="meas-list"><em style="color:#555">None yet</em></div>
+      <button class="btn btn-red" id="btn-clear">Clear all</button>
+      <span class="hint">Right-click on canvas to remove last • Esc cancels current</span>
+    </div>
+
+    <div class="sec">
+      <button class="btn btn-blue" id="btn-copy-url">📋 Copy shareable URL</button>
+      <button class="btn btn-grey" id="btn-reset-zoom" style="margin-top:4px">Reset zoom / pan</button>
+    </div>
+
+    <div class="sec">
+      <span class="hint">Keyboard: drag endpoint with arrow keys (Shift = ×10 px)</span>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── Main ── -->
+<div id="main">
+  <div id="main-title"></div>
+  <div id="canvas-wrap">
+    <canvas id="c"></canvas>
+  </div>
+  <div id="zoom-ctrl-bar">
+    <button id="btn-zoom-out" title="Zoom out">−</button>
+    <span id="zoom-display">1.00×</span>
+    <button id="btn-zoom-in" title="Zoom in">+</button>
+    <button id="btn-zoom-reset-bar" title="Reset zoom &amp; pan">↺ reset</button>
+  </div>
+  <div id="statusbar"></div>
+</div>
+
+<!-- Floating magnifier -->
+<canvas id="mag" width="128" height="128"></canvas>
+<!-- Calibration status -->
+<div id="calstatus"></div>
+
+<script>
+'use strict';
+/* ================================================================
+   MEASURE.HTML — universal pixel measuring tool
+   All config via URL params; control panel syncs changes to URL.
+   See README.md for full parameter reference.
+   ================================================================ */
+
+// ── Helpers ──────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const SP = new URLSearchParams(location.search);
+function sp(k, def) { return SP.has(k) ? SP.get(k) : def; }
+function spBool(k, def) { return SP.has(k) ? (SP.get(k) !== 'false' && SP.get(k) !== '0') : def; }
+function spNum(k, def) { return SP.has(k) && isFinite(+SP.get(k)) ? +SP.get(k) : def; }
+const EMBED_H    = spNum('h', 0);      // exact reported height override
+const EMBED_MAXH = spNum('maxh', 0);   // cap on both canvas height and reported height
+
+// ── Unit table ───────────────────────────────────────────────────
+const U2M = { ft: 0.3048, m: 1, cm: 0.01, km: 1000 };
+
+// ── Parse URL params into initial state ──────────────────────────
+const S = {
+  imageUrl:  sp('image', ''),
+  calPx:     0,
+  calDist:   0,
+  calUnit:   'ft',
+  unit:      sp('unit', ''),
+  gridOn:    false,
+  gridN:     1,
+  gridUnit:  'px',
+  gridColor: sp('grid_color', '#0064c8'),
+  magOn:     spBool('mag', true),
+  zoomOn:    spBool('zoom', true),
+  zoomCtrl:  spBool('zoomcontrol', false),
+  single:    spBool('single', false),
+  statusOn:  spBool('status', true),
+  pxMode:    sp('px', 'image'),   // 'image' = original image px; 'display' = canvas px at fit scale
+  title:     sp('title', ''),
+  panelOn:   spBool('panel', true),
+  maxW:      parseInt(sp('max_w', '820')) || 820,
+  axesOn:    spBool('axes', false),
+  origin:    sp('origin', '0,0'),
+};
+
+// ?cal=151,11.6,ft  (compact)
+if (SP.has('cal')) {
+  const parts = SP.get('cal').split(',');
+  if (parts.length >= 3) {
+    S.calPx   = parseFloat(parts[0]) || 0;
+    S.calDist = parseFloat(parts[1]) || 0;
+    S.calUnit = parts[2].trim() || 'ft';
+  }
+}
+// Legacy separate params (also accepted)
+if (!S.calPx && SP.has('cal_px'))     S.calPx   = parseFloat(sp('cal_px', '0')) || 0;
+if (!S.calDist && SP.has('cal_dist')) S.calDist = parseFloat(sp('cal_dist', '0')) || 0;
+if (SP.has('cal_unit'))               S.calUnit = sp('cal_unit', 'ft');
+
+// ?grid=1ft | ?grid=50px | ?grid=false
+if (SP.has('grid') && SP.get('grid') !== 'false') {
+  const gv = SP.get('grid');
+  const m = gv.match(/^([\d.]+)\s*([a-z_]+)?$/i);
+  if (m) { S.gridOn = true; S.gridN = parseFloat(m[1]) || 1; S.gridUnit = (m[2] || 'px').toLowerCase(); }
+}
+
+// Auto display unit
+if (!S.unit) S.unit = (S.calPx && S.calDist) ? S.calUnit : 'px';
+// Normalize legacy alias used by older sims
+if (S.unit === 'ft_dec') S.unit = 'ft';
+
+// ── Runtime state ─────────────────────────────────────────────────
+let loadedImg = null;
+let imgW = 0, imgH = 0;
+let canvasW = 400, canvasH = 300;
+
+// View transform: screenPt = imgPt × vs + (tx, ty)
+let vs = 1, tx = 0, ty = 0, vsInit = 1;
+
+// Measurements: [{start:{x,y}, end:{x,y}}] in image pixels
+let measurements = [];
+let curMeas = null;
+let isDragging = false;
+let isPending = false;  // first click placed; arrow follows cursor until second click
+let lastImgPt = null;   // last cursor pos in image coords (for arrow keys)
+
+// Calibration click mode
+const CAL = { NONE: 0, FIRST: 1, SECOND: 2 };
+let calStep = CAL.NONE;
+let calPt1 = null;
+
+// ── Canvas / magnifier ────────────────────────────────────────────
+const canvas = $('c');
+const ctx    = canvas.getContext('2d');
+const mag    = $('mag');
+const magCtx = mag.getContext('2d');
+mag.width = mag.height = 128;
+magCtx.imageSmoothingEnabled = false;
+
+// ── Coordinate helpers ────────────────────────────────────────────
+function w2s(p) { return { x: p.x * vs + tx, y: p.y * vs + ty }; }
+function s2w(p) { return { x: (p.x - tx) / vs, y: (p.y - ty) / vs }; }
+
+function canvasPt(e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: (e.clientX - r.left), y: (e.clientY - r.top) };
+}
+
+// ── Unit / formatting ─────────────────────────────────────────────
+function mPerImgPx() {
+  if (!S.calPx || !S.calDist) return 0;
+  return (S.calDist * (U2M[S.calUnit] || 1)) / S.calPx;
+}
+
+function fmt(imgPx) {
+  const mpp = mPerImgPx(), u = S.unit;
+  if (!mpp || u === 'px') {
+    const px = S.pxMode === 'display' ? Math.round(imgPx * vsInit) : Math.round(imgPx);
+    return `${px} px`;
+  }
+  const m = imgPx * mpp;
+  const tr = (n, d) => (+n).toFixed(d).replace(/\.?0+$/, '');
+  if (u === 'ft_in') {
+    const tf = m / U2M.ft;
+    let ft = Math.floor(tf), inch = Math.round((tf - ft) * 12);
+    if (inch === 12) { ft++; inch = 0; }
+    return `${ft}' ${inch}"`;
+  }
+  if (u === 'ft' || u === 'ft_dec')  return `${tr(m / U2M.ft, 1)} ft`;
+  if (u === 'm')   return `${tr(m, 2)} m`;
+  if (u === 'cm')  return `${tr(m * 100, 1)} cm`;
+  if (u === 'km')  return `${tr(m / 1000, 3)} km`;
+  return `${Math.round(imgPx)} px`;
+}
+
+function d(a, b) { return Math.hypot(b.x - a.x, b.y - a.y); }
+
+// ── Axes helpers ──────────────────────────────────────────────────
+function parseOrigin() {
+  const v = S.origin || '0,0';
+  if (v === 'center') return { x: imgW / 2, y: imgH / 2 };
+  const parts = v.split(',');
+  const x = parseFloat(parts[0]);
+  const y = parseFloat(parts[1]);
+  return { x: isNaN(x) ? 0 : x, y: isNaN(y) ? 0 : y };
+}
+
+// Returns { tickPx, fmtTick } for axes drawing.
+// Tries to match the grid spacing; falls back to a smart pixel default.
+function axisTickConfig() {
+  let tickPx = null;
+  let fmtTick;
+
+  if (S.gridUnit !== 'px') {
+    const mpp = mPerImgPx();
+    if (mpp) tickPx = (S.gridN * (U2M[S.gridUnit] || 1)) / mpp;
+  } else if (S.gridN >= 5) {
+    tickPx = S.gridN;
+  }
+
+  if (tickPx && tickPx >= 5) {
+    // Grid-aligned ticks: label shows n * gridN in gridUnit
+    fmtTick = n => {
+      if (n === 0) return '0';
+      const val = n * S.gridN;
+      if (S.gridUnit === 'px') return String(Math.round(val));
+      const absVal = Math.abs(val);
+      const str = absVal === Math.round(absVal) ? String(Math.round(val)) : val.toFixed(1);
+      return str + ' ' + S.gridUnit;
+    };
+  } else {
+    // Smart default: round power-of-10 pixel spacing
+    const raw = Math.pow(10, Math.round(Math.log10(Math.max(imgW, 1) / 8)));
+    tickPx = isFinite(raw) && raw > 0 ? raw : 50;
+    fmtTick = n => n === 0 ? '0' : String(Math.round(n * tickPx)) + ' px';
+  }
+
+  return { tickPx, fmtTick };
+}
+
+// ── Zoom helpers ──────────────────────────────────────────────────
+function doZoom(factor) {
+  const cx = canvasW / 2, cy = canvasH / 2;
+  const nv = Math.max(0.04, Math.min(vs * factor, 80));
+  tx = cx - (cx - tx) * (nv / vs);
+  ty = cy - (cy - ty) * (nv / vs);
+  vs = nv;
+  render();
+  updateZoomDisplay();
+}
+
+function updateZoomDisplay() {
+  const el = $('zoom-display');
+  if (!el) return;
+  el.textContent = vsInit > 0 ? (vs / vsInit).toFixed(2) + '×' : '—';
+}
+
+function updateZoomCtrlBar() {
+  const bar = $('zoom-ctrl-bar');
+  if (bar) bar.style.display = S.zoomCtrl ? 'flex' : 'none';
+}
+
+// ── Rendering ─────────────────────────────────────────────────────
+const MCOLORS = ['#e74c3c','#2980b9','#27ae60','#8e44ad','#e67e22','#16a085','#d35400','#2c3e50'];
+
+function render() {
+  ctx.clearRect(0, 0, canvasW, canvasH);
+
+  // Image-space drawing (grid, axes)
+  ctx.save();
+  ctx.translate(tx, ty);
+  ctx.scale(vs, vs);
+  if (loadedImg) {
+    ctx.drawImage(loadedImg, 0, 0, imgW, imgH);
+    if (S.gridOn) drawGrid();
+    if (S.axesOn) drawAxes();
+  } else {
+    ctx.fillStyle = '#ccc';
+    ctx.fillRect(0, 0, canvasW / vs, canvasH / vs);
+    ctx.fillStyle = '#555';
+    ctx.font = `${14 / vs}px Arial`;
+    ctx.textAlign = 'center';
+    ctx.fillText(S.imageUrl ? 'Loading image…' : 'No image — enter URL in panel.', canvasW / (2 * vs), canvasH / (2 * vs));
+  }
+  ctx.restore();
+
+  // Measurements (screen coords)
+  const all = [...measurements];
+  if (curMeas) all.push(curMeas);
+  all.forEach((m, i) => drawMeas(m, i, i === all.length - 1 && !!curMeas));
+
+  // Calibration preview
+  if (calStep === CAL.SECOND && calPt1 && lastImgPt) drawCalPreview(calPt1, lastImgPt);
+}
+
+function drawGrid() {
+  let sp;
+  if (S.gridUnit === 'px') {
+    sp = S.gridN;
+  } else {
+    const mpp = mPerImgPx();
+    if (!mpp) return;
+    sp = (S.gridN * (U2M[S.gridUnit] || 1)) / mpp;
+  }
+  if (!sp || sp < 0.5) return;
+
+  const h = S.gridColor.replace('#','');
+  const gr = parseInt(h.slice(0,2),16), gg = parseInt(h.slice(2,4),16), gb = parseInt(h.slice(4,6),16);
+  ctx.strokeStyle = `rgba(${gr},${gg},${gb},0.4)`;
+  ctx.lineWidth = 1 / vs;
+  ctx.beginPath();
+  let n = 0;
+  for (let x = 0; x <= imgW + sp; x += sp) { if (n++ > 500) break; ctx.moveTo(x, 0); ctx.lineTo(x, imgH); }
+  n = 0;
+  for (let y = 0; y <= imgH + sp; y += sp) { if (n++ > 500) break; ctx.moveTo(0, y); ctx.lineTo(imgW, y); }
+  ctx.stroke();
+
+  // Axis labels (only when not too many lines)
+  const cols = imgW / sp, rows = imgH / sp;
+  if (cols < 40 && rows < 40 && S.gridUnit !== 'px') {
+    ctx.fillStyle = `rgba(${gr},${gg},${gb},0.7)`;
+    ctx.font = `${Math.max(9/vs, 1)}px Arial`;
+    ctx.textAlign = 'left';
+    let ci = 0;
+    for (let x = sp; x < imgW; x += sp) {
+      if (ci++ > 40) break;
+      const val = Math.round((x / sp) * S.gridN * 100) / 100;
+      ctx.fillText(`${val}`, x + 2/vs, 12/vs);
+    }
+    let ri = 0;
+    for (let y = sp; y < imgH; y += sp) {
+      if (ri++ > 40) break;
+      const val = Math.round((y / sp) * S.gridN * 100) / 100;
+      ctx.fillText(`${val}`, 2/vs, y - 2/vs);
+    }
+  }
+}
+
+// Draws axes in image-space coordinates.
+// Called inside render()'s ctx.save()/restore() block, so the view transform
+// (translate + scale) is already applied — no inner save needed.
+function drawAxes() {
+  const { x: ox, y: oy } = parseOrigin();
+  const { tickPx, fmtTick } = axisTickConfig();
+
+  const AX  = 'rgba(200,50,50,0.92)';
+  const TL  = 6 / vs;      // tick half-length in image px
+  const AL  = 9 / vs;      // arrowhead size
+  const fs  = Math.max(10 / vs, 1);
+  const showLabels = tickPx * vs >= 18;  // at least 18 screen px between ticks
+
+  ctx.strokeStyle = AX;
+  ctx.lineWidth = 2 / vs;
+
+  // Axis lines (full image width/height)
+  ctx.beginPath();
+  ctx.moveTo(0, oy); ctx.lineTo(imgW, oy);   // x-axis
+  ctx.moveTo(ox, 0); ctx.lineTo(ox, imgH);   // y-axis
+  ctx.stroke();
+
+  // Arrowhead helper (tip at x,y, pointing in direction dx,dy)
+  function arrow(x, y, dx, dy) {
+    ctx.fillStyle = AX;
+    ctx.beginPath();
+    ctx.moveTo(x + dx * AL, y + dy * AL);
+    ctx.lineTo(x + dy * AL * 0.4, y - dx * AL * 0.4);
+    ctx.lineTo(x - dy * AL * 0.4, y + dx * AL * 0.4);
+    ctx.closePath();
+    ctx.fill();
+  }
+  arrow(imgW, oy,  1,  0);  // x-axis: rightward
+  arrow(ox,   0,   0, -1);  // y-axis: upward (toward row 0, the top of the image)
+
+  ctx.lineWidth = 1 / vs;
+  ctx.font = `bold ${fs}px Arial`;
+
+  // X-axis ticks
+  const xn0 = Math.ceil(-ox / tickPx);
+  const xn1 = Math.floor((imgW - ox) / tickPx);
+  for (let n = xn0; n <= xn1; n++) {
+    const xp = ox + n * tickPx;
+    ctx.strokeStyle = AX;
+    ctx.beginPath();
+    ctx.moveTo(xp, oy - TL);
+    ctx.lineTo(xp, oy + TL);
+    ctx.stroke();
+    if (showLabels) {
+      ctx.fillStyle = AX;
+      ctx.textAlign = 'center';
+      // Origin label goes above the axis so it doesn't collide with y-axis labels
+      ctx.textBaseline = n === 0 ? 'bottom' : 'top';
+      ctx.fillText(fmtTick(n), xp, oy + (n === 0 ? -(TL + 2/vs) : TL + 2/vs));
+    }
+  }
+  // 'x' letter near right arrowhead
+  ctx.fillStyle = AX;
+  ctx.font = `italic bold ${fs * 1.2}px Arial`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('x', imgW - AL * 2.8, oy - fs * 0.9);
+
+  // Y-axis ticks (n positive = downward in image coords)
+  const yn0 = Math.ceil(-oy / tickPx);
+  const yn1 = Math.floor((imgH - oy) / tickPx);
+  ctx.font = `bold ${fs}px Arial`;
+  for (let n = yn0; n <= yn1; n++) {
+    if (n === 0) continue;  // skip: already labelled by x-axis tick at origin
+    const yp = oy + n * tickPx;
+    ctx.strokeStyle = AX;
+    ctx.beginPath();
+    ctx.moveTo(ox - TL, yp);
+    ctx.lineTo(ox + TL, yp);
+    ctx.stroke();
+    if (showLabels) {
+      ctx.fillStyle = AX;
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(fmtTick(n), ox - TL - 2/vs, yp);
+    }
+  }
+  // 'y' letter near top arrowhead
+  ctx.fillStyle = AX;
+  ctx.font = `italic bold ${fs * 1.2}px Arial`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText('y', ox + 3/vs, AL * 0.5);
+
+  // Origin dot
+  ctx.fillStyle = AX;
+  ctx.beginPath();
+  ctx.arc(ox, oy, 3.5/vs, 0, 2 * Math.PI);
+  ctx.fill();
+}
+
+function drawMeas(m, idx, isCurrent) {
+  if (!m.start || !m.end) return;
+  const s = w2s(m.start), e = w2s(m.end);
+  const dx = e.x - s.x, dy = e.y - s.y;
+  const ang = Math.atan2(dy, dx);
+  const dist = d(m.start, m.end);
+  const color = isCurrent ? '#e74c3c' : MCOLORS[idx % MCOLORS.length];
+
+  // Line
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(s.x, s.y);
+  ctx.lineTo(e.x, e.y);
+  ctx.stroke();
+
+  // Arrowheads
+  const AL = 11, AA = Math.PI / 6;
+  const arrow = (x, y, dir) => {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x - AL * Math.cos(dir - AA), y - AL * Math.sin(dir - AA));
+    ctx.lineTo(x - AL * Math.cos(dir + AA), y - AL * Math.sin(dir + AA));
+    ctx.closePath();
+    ctx.fill();
+  };
+  arrow(s.x, s.y, ang + Math.PI);
+  arrow(e.x, e.y, ang);
+
+  // Label at midpoint
+  const mx = (s.x + e.x) / 2, my = (s.y + e.y) / 2;
+  const pa = ang + Math.PI / 2;
+  const lx = mx + Math.cos(pa) * 20, ly = my + Math.sin(pa) * 20;
+  const txt = S.single ? fmt(dist) : `#${idx + 1}: ${fmt(dist)}`;
+
+  ctx.font = 'bold 13px Arial';
+  const tw = ctx.measureText(txt).width;
+  ctx.fillStyle = 'rgba(255,255,255,0.88)';
+  ctx.fillRect(lx - tw / 2 - 3, ly - 9, tw + 6, 17);
+  ctx.fillStyle = color;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(txt, lx, ly);
+  ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'left';
+}
+
+function drawCalPreview(p1, p2) {
+  const s = w2s(p1), e = w2s(p2);
+  ctx.strokeStyle = '#2ecc71';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 3]);
+  ctx.beginPath();
+  ctx.moveTo(s.x, s.y);
+  ctx.lineTo(e.x, e.y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#2ecc71';
+  ctx.beginPath();
+  ctx.arc(s.x, s.y, 5, 0, 2 * Math.PI);
+  ctx.fill();
+}
+
+// ── Magnifier ──────────────────────────────────────────────────────
+const MAG_SRC = 16;
+function updateMag(screenPt, clientX, clientY) {
+  if (!S.magOn || !loadedImg) { mag.style.display = 'none'; return; }
+  const ip = s2w(screenPt);
+  const half = MAG_SRC / 2;
+  let sx = Math.round(ip.x - half), sy = Math.round(ip.y - half), sw = MAG_SRC, sh = MAG_SRC;
+  if (sx < 0) { sw += sx; sx = 0; }
+  if (sy < 0) { sh += sy; sy = 0; }
+  if (sx + sw > imgW) sw = imgW - sx;
+  if (sy + sh > imgH) sh = imgH - sy;
+  if (sw <= 0 || sh <= 0) return;
+
+  magCtx.fillStyle = '#fff';
+  magCtx.fillRect(0, 0, 128, 128);
+  magCtx.imageSmoothingEnabled = false;
+  magCtx.drawImage(loadedImg, sx, sy, sw, sh, 0, 0, 128, 128);
+
+  const cx = 64, cy = 64;
+  magCtx.strokeStyle = 'red';
+  magCtx.lineWidth = 1;
+  magCtx.beginPath();
+  magCtx.moveTo(cx - 7, cy); magCtx.lineTo(cx + 7, cy);
+  magCtx.moveTo(cx, cy - 7); magCtx.lineTo(cx, cy + 7);
+  magCtx.stroke();
+
+  const pad = 18, w = 128;
+  let mx2 = clientX + pad, my2 = clientY + pad;
+  if (mx2 + w > window.innerWidth)  mx2 = clientX - pad - w;
+  if (my2 + w > window.innerHeight) my2 = clientY - pad - w;
+  mag.style.left = mx2 + 'px';
+  mag.style.top  = my2 + 'px';
+  mag.style.display = 'block';
+}
+
+// ── Image loading ──────────────────────────────────────────────────
+function loadImage(url) {
+  loadedImg = null;
+  render();
+  if (!url) return;
+  const img = new Image();
+  let triedCors = false;
+  img.onload = () => {
+    loadedImg = img;
+    imgW = img.naturalWidth;
+    imgH = img.naturalHeight;
+    resetView();
+    render();
+  };
+  img.onerror = () => {
+    if (!triedCors) {
+      triedCors = true;
+      img.src = 'https://corsproxy.io/?' + encodeURIComponent(url);
+    }
+  };
+  img.src = url;
+}
+
+function resetView() {
+  if (!imgW || !imgH) return;
+
+  // px=display mode pins sizing to max_w (legacy sims that match a fixed display
+  // scale); it opts out of responsive container sizing so display-px readings
+  // (fmt() = imgPx * vsInit) stay stable regardless of iframe width.
+  if (S.pxMode === 'display') {
+    const maxW = S.maxW;
+    const _rawH = Math.max(300, Math.floor(window.innerHeight * 0.85));
+    const maxH = EMBED_MAXH > 0 ? Math.min(_rawH, EMBED_MAXH) : _rawH;
+    const sv = Math.min(maxW / imgW, maxH / imgH);
+    canvasW = Math.round(imgW * sv);
+    canvasH = Math.round(imgH * sv);
+    vs = sv; vsInit = sv; tx = 0; ty = 0;
+    canvas.width  = canvasW;
+    canvas.height = canvasH;
+    canvas.style.width  = canvasW + 'px';
+    canvas.style.height = canvasH + 'px';
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    updateZoomDisplay();
+    return;
+  }
+
+  // Responsive: the canvas fills #canvas-wrap at device-pixel resolution (crisp);
+  // the image is contain-fit and centered, so it fills the iframe edge-to-edge
+  // when the iframe ≈ the image's aspect. Logical coords stay CSS px via a base
+  // setTransform(dpr); render()'s own translate/scale compose on top of it.
+  const wrap = $('canvas-wrap');
+  const cw = wrap.clientWidth, ch = wrap.clientHeight;
+  if (!cw || !ch) return;
+  const dpr = window.devicePixelRatio || 1;
+  canvasW = cw; canvasH = ch;
+  canvas.width  = Math.round(cw * dpr);
+  canvas.height = Math.round(ch * dpr);
+  canvas.style.width  = '100%';
+  canvas.style.height = '100%';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);   // re-applied AFTER resizing (resize clears it)
+  const sv = Math.min(cw / imgW, ch / imgH);
+  vs = sv; vsInit = sv;
+  tx = (cw - imgW * sv) / 2;
+  ty = (ch - imgH * sv) / 2;
+  updateZoomDisplay();
+}
+
+// ── Mouse / touch events ──────────────────────────────────────────
+let panDrag = false, panStart = null, panTx0 = 0, panTy0 = 0;
+
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+canvas.addEventListener('mousedown', e => {
+  e.preventDefault();
+  const sp2 = canvasPt(e), wp = s2w(sp2);
+  lastImgPt = wp;
+
+  if (e.button === 2) {
+    if (isPending) { isPending = false; curMeas = null; render(); return; }
+    if (measurements.length) { measurements.pop(); render(); updateMeasList(); }
+    return;
+  }
+  if (e.button === 1 || (e.button === 0 && e.altKey)) {
+    panDrag = true;
+    panStart = { x: e.clientX, y: e.clientY };
+    panTx0 = tx; panTy0 = ty;
+    canvas.style.cursor = 'grabbing';
+    return;
+  }
+
+  if (calStep === CAL.FIRST) {
+    calPt1 = wp; calStep = CAL.SECOND;
+    showCalStatus('Click the SECOND calibration point');
+    render(); return;
+  }
+  if (calStep === CAL.SECOND) { finishCal(calPt1, wp); return; }
+
+  if (isPending) {
+    curMeas.end = wp;
+    if (d(curMeas.start, curMeas.end) > 2) { measurements.push(curMeas); updateMeasList(); }
+    curMeas = null; isPending = false;
+    render();
+    return;
+  }
+
+  if (S.single) measurements = [];
+  isDragging = true;
+  curMeas = { start: wp, end: wp };
+});
+
+canvas.addEventListener('mousemove', e => {
+  const sp2 = canvasPt(e), wp = s2w(sp2);
+  lastImgPt = wp;
+
+  if (panDrag) {
+    tx = panTx0 + e.clientX - panStart.x;
+    ty = panTy0 + e.clientY - panStart.y;
+    render(); return;
+  }
+  if (isDragging && curMeas) { curMeas.end = wp; render(); }
+  if (isPending && curMeas) { curMeas.end = wp; render(); }
+  if (calStep === CAL.SECOND) render();
+  updateStatus(wp, (isDragging || isPending) ? curMeas : null);
+  updateMag(sp2, e.clientX, e.clientY);
+});
+
+canvas.addEventListener('mouseup', e => {
+  if (panDrag) { panDrag = false; canvas.style.cursor = 'crosshair'; return; }
+  if (isDragging && curMeas) {
+    isDragging = false;
+    if (d(curMeas.start, curMeas.end) > 2) {
+      measurements.push(curMeas); updateMeasList(); curMeas = null;
+    } else {
+      isPending = true;
+    }
+    render();
+  }
+});
+
+canvas.addEventListener('mouseleave', () => {
+  if (panDrag) { panDrag = false; canvas.style.cursor = 'crosshair'; }
+  if (isDragging && curMeas) {
+    isDragging = false;
+    if (d(curMeas.start, curMeas.end) > 2) { measurements.push(curMeas); updateMeasList(); }
+    curMeas = null;
+    render();
+  }
+  mag.style.display = 'none';
+});
+
+// Scroll to zoom
+canvas.addEventListener('wheel', e => {
+  if (!S.zoomOn) return;
+  e.preventDefault();
+  const sp2 = canvasPt(e);
+  const f = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+  const nv = Math.max(0.04, Math.min(vs * f, 80));
+  tx = sp2.x - (sp2.x - tx) * (nv / vs);
+  ty = sp2.y - (sp2.y - ty) * (nv / vs);
+  vs = nv;
+  render();
+  updateZoomDisplay();
+}, { passive: false });
+
+// ── Arrow key cursor movement ─────────────────────────────────────
+const ARROWDP = { ArrowLeft:[-1,0], ArrowRight:[1,0], ArrowUp:[0,-1], ArrowDown:[0,1] };
+window.addEventListener('keydown', e => {
+  const tag = document.activeElement?.tagName;
+  if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+
+  if (e.key in ARROWDP) {
+    e.preventDefault();
+    if (!lastImgPt) return;
+    const [dx, dy] = ARROWDP[e.key];
+    const step = e.shiftKey ? 10 : 1;
+    lastImgPt = { x: lastImgPt.x + dx * step, y: lastImgPt.y + dy * step };
+    if ((isDragging || isPending) && curMeas) curMeas.end = lastImgPt;
+    updateStatus(lastImgPt, (isDragging || isPending) ? curMeas : null);
+    render();
+    updateMeasList();
+    mag.style.display = 'none';
+    return;
+  }
+
+  if (e.key === 'Escape') {
+    if (calStep !== CAL.NONE) { cancelCal(); return; }
+    if (isPending) { isPending = false; curMeas = null; render(); return; }
+    if (isDragging) { isDragging = false; curMeas = null; render(); }
+  }
+});
+
+// ── Touch ──────────────────────────────────────────────────────────
+let touchId = null;
+canvas.addEventListener('touchstart', e => {
+  if (e.touches.length !== 1) return;
+  e.preventDefault();
+  const t = e.touches[0]; touchId = t.identifier;
+  const sp2 = canvasPt(t), wp = s2w(sp2);
+  lastImgPt = wp; isDragging = true; curMeas = { start: wp, end: wp };
+}, { passive: false });
+
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  const t = [...e.touches].find(t => t.identifier === touchId);
+  if (!t) return;
+  const sp2 = canvasPt(t), wp = s2w(sp2);
+  lastImgPt = wp;
+  if (isDragging && curMeas) { curMeas.end = wp; render(); }
+}, { passive: false });
+
+canvas.addEventListener('touchend', () => {
+  if (isDragging && curMeas) {
+    isDragging = false;
+    if (d(curMeas.start, curMeas.end) > 2) { measurements.push(curMeas); updateMeasList(); }
+    curMeas = null; render();
+  }
+  touchId = null;
+});
+
+// ── Status bar ──────────────────────────────────────────────────────
+function updateStatus(ip, meas) {
+  let t = `x:${Math.round(ip.x)}  y:${Math.round(ip.y)}`;
+  if (meas) {
+    const dist2 = d(meas.start, meas.end);
+    const deg = Math.round(Math.atan2(meas.end.y - meas.start.y, meas.end.x - meas.start.x) * 180 / Math.PI);
+    t += `     ${fmt(dist2)}   ${deg}°`;
+  }
+  $('statusbar').textContent = t;
+}
+
+function updateMeasList() {
+  const el = $('meas-list');
+  if (!measurements.length) { el.innerHTML = '<em style="color:#555">None yet</em>'; return; }
+  el.innerHTML = measurements.map((m, i) => {
+    const dist2 = d(m.start, m.end);
+    const deg = Math.round(Math.atan2(m.end.y - m.start.y, m.end.x - m.start.x) * 180 / Math.PI);
+    return `<div class="mitem"><b>#${i + 1}</b>: ${fmt(dist2)} &nbsp;(${deg}°)</div>`;
+  }).join('');
+}
+
+// ── Calibration click mode ─────────────────────────────────────────
+function startCal() {
+  calStep = CAL.FIRST; calPt1 = null;
+  isDragging = false; curMeas = null;
+  $('btn-cal-click').classList.add('active');
+  $('btn-cal-click').textContent = '✕ Cancel calibration';
+  showCalStatus('Click the FIRST calibration point on the image');
+}
+function cancelCal() {
+  calStep = CAL.NONE; calPt1 = null;
+  $('btn-cal-click').classList.remove('active');
+  $('btn-cal-click').textContent = '▶ Calibrate by clicking';
+  hideCalStatus(); render();
+}
+function finishCal(p1, p2) {
+  const px = Math.round(d(p1, p2));
+  if (!px) { cancelCal(); return; }
+  const distStr = prompt(`These two points are ${px} px apart in the image.\n\nEnter the real-world distance between them:`);
+  if (!distStr || isNaN(parseFloat(distStr))) { cancelCal(); return; }
+  const unitStr = prompt('Unit? (ft, m, cm, km)', S.calUnit || 'ft');
+  if (!unitStr || !U2M[unitStr.trim()]) { cancelCal(); return; }
+  S.calPx = px;
+  S.calDist = parseFloat(distStr);
+  S.calUnit = unitStr.trim();
+  if (S.unit === 'px') S.unit = S.calUnit;
+  cancelCal();
+  updatePanelFromState();
+  updateCalInfo();
+  syncUrl();
+  render();
+  updateMeasList();
+}
+function showCalStatus(msg) { const e = $('calstatus'); e.textContent = msg; e.style.display = 'block'; }
+function hideCalStatus()    { $('calstatus').style.display = 'none'; }
+function updateCalInfo() {
+  $('cal-info').textContent = (S.calPx && S.calDist)
+    ? `${S.calPx} px = ${S.calDist} ${S.calUnit}`
+    : 'No calibration set';
+}
+
+// ── URL sync ───────────────────────────────────────────────────────
+function syncUrl() {
+  const p = new URLSearchParams();
+  if (S.imageUrl)             p.set('image', S.imageUrl);
+  if (S.calPx && S.calDist)  p.set('cal', `${S.calPx},${S.calDist},${S.calUnit}`);
+  p.set('unit', S.unit);
+  if (S.gridOn)               p.set('grid', `${S.gridN}${S.gridUnit}`);
+  if (S.gridColor !== '#0064c8') p.set('grid_color', S.gridColor);
+  if (!S.magOn)               p.set('mag', 'false');
+  if (!S.zoomOn)              p.set('zoom', 'false');
+  if (S.zoomCtrl)             p.set('zoomcontrol', 'true');
+  if (S.single)               p.set('single', 'true');
+  if (!S.statusOn)            p.set('status', 'false');
+  if (S.pxMode !== 'image')   p.set('px', S.pxMode);
+  if (S.title)                p.set('title', S.title);
+  if (!S.panelOn)             p.set('panel', 'false');
+  if (S.maxW !== 820)         p.set('max_w', String(S.maxW));
+  if (S.axesOn)               p.set('axes', 'true');
+  if (S.axesOn && S.origin && S.origin !== '0,0') p.set('origin', S.origin);
+  const q = p.toString();
+  history.replaceState(null, '', location.pathname + (q ? '?' + q : ''));
+}
+
+// ── Control panel ──────────────────────────────────────────────────
+function updatePanelFromState() {
+  $('pi-image').value        = S.imageUrl;
+  $('pi-cal-px').value       = S.calPx || '';
+  $('pi-cal-dist').value     = S.calDist || '';
+  $('pi-cal-unit').value     = S.calUnit;
+  $('pi-unit').value         = S.unit;
+  $('pi-grid-on').checked    = S.gridOn;
+  $('pi-grid-n').value       = S.gridN;
+  $('pi-grid-unit').value    = S.gridUnit;
+  $('pi-grid-color').value   = S.gridColor;
+  $('pi-mag').checked        = S.magOn;
+  $('pi-zoom').checked       = S.zoomOn;
+  $('pi-zoomctrl').checked   = S.zoomCtrl;
+  $('pi-single').checked     = S.single;
+  $('pi-status').checked     = S.statusOn;
+  $('pi-px-display').checked = S.pxMode === 'display';
+  $('pi-axes').checked       = S.axesOn;
+  $('pi-origin').value       = S.origin;
+  $('pi-title').value        = S.title;
+  updateCalInfo();
+}
+
+function updateTitle() {
+  const el = $('main-title');
+  el.textContent = S.title || '';
+  el.style.display = S.title ? 'block' : 'none';
+  document.title = S.title || 'Pixel Measure';
+}
+
+function updateStatusBar() {
+  $('statusbar').style.display = S.statusOn ? '' : 'none';
+}
+
+function showPanel(on) {
+  S.panelOn = on;
+  on ? $('sidebar').classList.remove('hidden') : $('sidebar').classList.add('hidden');
+}
+
+// Panel toggle
+$('panel-toggle').addEventListener('click', () => { showPanel(!S.panelOn); syncUrl(); });
+$('sidebar-close').addEventListener('click', () => { showPanel(false); syncUrl(); });
+
+// Image
+$('btn-load').addEventListener('click', () => {
+  S.imageUrl = $('pi-image').value.trim();
+  measurements = []; curMeas = null; isDragging = false;
+  loadImage(S.imageUrl); syncUrl(); updateMeasList();
+});
+$('pi-image').addEventListener('keydown', e => { if (e.key === 'Enter') $('btn-load').click(); });
+
+// Calibration fields
+const onCalChange = () => {
+  S.calPx   = parseFloat($('pi-cal-px').value)   || 0;
+  S.calDist = parseFloat($('pi-cal-dist').value) || 0;
+  S.calUnit = $('pi-cal-unit').value;
+  updateCalInfo(); syncUrl(); render(); updateMeasList();
+};
+['pi-cal-px','pi-cal-dist','pi-cal-unit'].forEach(id => $(id).addEventListener('change', onCalChange));
+$('btn-cal-click').addEventListener('click', () => { calStep !== CAL.NONE ? cancelCal() : startCal(); });
+
+// Unit
+$('pi-unit').addEventListener('change', () => { S.unit = $('pi-unit').value; syncUrl(); render(); updateMeasList(); });
+
+// Grid
+$('pi-grid-on').addEventListener('change',  () => { S.gridOn    = $('pi-grid-on').checked;                syncUrl(); render(); });
+$('pi-grid-n').addEventListener('change',   () => { S.gridN     = parseFloat($('pi-grid-n').value) || 1; syncUrl(); render(); });
+$('pi-grid-unit').addEventListener('change',() => { S.gridUnit  = $('pi-grid-unit').value;               syncUrl(); render(); });
+$('pi-grid-color').addEventListener('input',() => { S.gridColor = $('pi-grid-color').value;              syncUrl(); render(); });
+
+// Features
+$('pi-mag').addEventListener('change',     () => { S.magOn    = $('pi-mag').checked;    if (!S.magOn) mag.style.display = 'none'; syncUrl(); });
+$('pi-zoom').addEventListener('change',    () => { S.zoomOn   = $('pi-zoom').checked;   syncUrl(); });
+$('pi-zoomctrl').addEventListener('change',() => { S.zoomCtrl = $('pi-zoomctrl').checked; updateZoomCtrlBar(); syncUrl(); });
+$('pi-single').addEventListener('change',  () => { S.single   = $('pi-single').checked; if (S.single) { measurements = []; render(); updateMeasList(); } syncUrl(); });
+$('pi-status').addEventListener('change',  () => { S.statusOn = $('pi-status').checked; updateStatusBar(); syncUrl(); });
+$('pi-px-display').addEventListener('change', () => { S.pxMode = $('pi-px-display').checked ? 'display' : 'image'; render(); updateMeasList(); syncUrl(); });
+
+// Axes
+$('pi-axes').addEventListener('change',  () => { S.axesOn = $('pi-axes').checked; syncUrl(); render(); });
+$('pi-origin').addEventListener('change',() => { S.origin = $('pi-origin').value.trim() || '0,0'; syncUrl(); render(); });
+
+// Title
+$('pi-title').addEventListener('input', () => { S.title = $('pi-title').value; updateTitle(); syncUrl(); });
+
+// Action buttons
+$('btn-clear').addEventListener('click', () => {
+  measurements = []; curMeas = null; isDragging = false;
+  render(); updateMeasList();
+});
+$('btn-reset-zoom').addEventListener('click', () => { resetView(); render(); });
+$('btn-copy-url').addEventListener('click', async () => {
+  syncUrl();
+  try {
+    await navigator.clipboard.writeText(location.href);
+    const b = $('btn-copy-url');
+    b.textContent = '✓ Copied!';
+    setTimeout(() => { b.textContent = '📋 Copy shareable URL'; }, 2000);
+  } catch { prompt('Copy this URL:', location.href); }
+});
+
+// Zoom control bar buttons
+$('btn-zoom-in').addEventListener('click',      () => doZoom(1.25));
+$('btn-zoom-out').addEventListener('click',     () => doZoom(1 / 1.25));
+$('btn-zoom-reset-bar').addEventListener('click', () => { resetView(); render(); });
+
+// ── Init ───────────────────────────────────────────────────────────
+showPanel(S.panelOn);
+updatePanelFromState();
+updateTitle();
+updateStatusBar();
+updateZoomCtrlBar();
+updateZoomDisplay();
+updateMeasList();
+loadImage(S.imageUrl);
+
+// ── Re-fit the canvas when the iframe (and thus #canvas-wrap) resizes ──
+// EigenNode sizes the iframe via static aspect-ratio CSS (no postMessage), so
+// we just keep the canvas filling its container at the current size.
+(function () {
+  var wrap = $('canvas-wrap');
+  if (window.ResizeObserver && wrap) {
+    new ResizeObserver(function () {
+      if (!loadedImg) return;
+      resetView();
+      render();
+    }).observe(wrap);
+  }
+})();
+</script>
+
+
+
+
+<!-- CHEAT PANEL — visible only when ?cheat=1 is in the URL -->
+<script>
+(function () {
+  var _cpQ = new URLSearchParams(location.search);
+  if (_cpQ.get('cheat') !== '1') return;
+
+  var CHEAT_DEFS = [
+    {
+        "name": "image",
+        "type": "text",
+        "default": "",
+        "desc": "URL of image to load"
+    },
+    {
+        "name": "unit",
+        "type": "select",
+        "values": [
+            "px",
+            "ft",
+            "ft_in",
+            "m",
+            "cm",
+            "km"
+        ],
+        "default": "px",
+        "desc": "Display unit"
+    },
+    {
+        "name": "cal",
+        "type": "text",
+        "default": "",
+        "desc": "Calibration: \"px,dist,unit\" e.g. 151,11.6,ft"
+    },
+    {
+        "name": "cal_px",
+        "type": "number",
+        "min": 1,
+        "max": 9999,
+        "step": 1,
+        "default": "",
+        "desc": "Calibration distance in pixels"
+    },
+    {
+        "name": "cal_dist",
+        "type": "number",
+        "min": 0.01,
+        "max": 9999,
+        "step": 0.1,
+        "default": "",
+        "desc": "Calibration real-world distance"
+    },
+    {
+        "name": "cal_unit",
+        "type": "select",
+        "values": [
+            "ft",
+            "m",
+            "cm",
+            "km"
+        ],
+        "default": "ft",
+        "desc": "Calibration unit"
+    },
+    {
+        "name": "grid",
+        "type": "text",
+        "default": "",
+        "desc": "Grid: \"1ft\", \"50px\", or \"false\""
+    },
+    {
+        "name": "grid_color",
+        "type": "text",
+        "default": "#0064c8",
+        "desc": "Grid color (e.g. #0064c8)"
+    },
+    {
+        "name": "mag",
+        "type": "toggle",
+        "default": 1,
+        "desc": "Show floating magnifier under cursor"
+    },
+    {
+        "name": "zoom",
+        "type": "toggle",
+        "default": 1,
+        "desc": "Enable scroll-to-zoom and alt-drag-to-pan"
+    },
+    {
+        "name": "zoomcontrol",
+        "type": "toggle",
+        "default": 0,
+        "desc": "Show zoom-in / zoom-out / reset buttons with live zoom level display"
+    },
+    {
+        "name": "single",
+        "type": "toggle",
+        "default": 0,
+        "desc": "Single measurement mode (new drag replaces old)"
+    },
+    {
+        "name": "status",
+        "type": "toggle",
+        "default": 1,
+        "desc": "Show status bar with x/y coordinates"
+    },
+    {
+        "name": "axes",
+        "type": "toggle",
+        "default": 0,
+        "desc": "Draw labeled x/y axes; tick spacing matches grid setting (or a smart default)"
+    },
+    {
+        "name": "origin",
+        "type": "text",
+        "default": "0,0",
+        "desc": "Axis origin in image pixels \"x,y\", or \"center\""
+    },
+    {
+        "name": "panel",
+        "type": "toggle",
+        "default": 1,
+        "desc": "Show control panel"
+    },
+    {
+        "name": "title",
+        "type": "text",
+        "default": "",
+        "desc": "Heading text above the tool"
+    },
+    {
+        "name": "px",
+        "type": "select",
+        "values": [
+            "image",
+            "display"
+        ],
+        "default": "image",
+        "desc": "Pixel mode: image pixels or display pixels"
+    },
+    {
+        "name": "max_w",
+        "type": "number",
+        "min": 400,
+        "max": 2000,
+        "step": 50,
+        "default": 820,
+        "desc": "Maximum canvas width (px)"
+    },
+    {
+        "name": "h",
+        "type": "number",
+        "min": 80,
+        "max": 2000,
+        "step": 10,
+        "default": "",
+        "desc": "Exact reported iframe height (px); overrides auto"
+    },
+    {
+        "name": "maxh",
+        "type": "number",
+        "min": 80,
+        "max": 2000,
+        "step": 10,
+        "default": "",
+        "desc": "Cap on canvas height and reported iframe height (px)"
+    }
+];
+
+  var EMBED_KEYS = ['cheat'];
+
+  // Build clean URL (no embed/cheat params) with optional overrides
+  function buildCleanUrl(overrides) {
+    var p = new URLSearchParams(location.search);
+    EMBED_KEYS.forEach(function (k) { p.delete(k); });
+    for (var k in overrides) {
+      var v = overrides[k];
+      if (v === null || v === '') p.delete(k);
+      else p.set(k, v);
+    }
+    var qs = p.toString();
+    return location.origin + location.pathname + (qs ? '?' + qs : '');
+  }
+
+  function buildCheatUrl(overrides) {
+    var base = buildCleanUrl(overrides);
+    return base + (base.indexOf('?') >= 0 ? '&' : '?') + 'cheat=1';
+  }
+
+  var urlLinkEl = null; // set after render
+
+  function updateUrlDisplay(overrides) {
+    if (!urlLinkEl) return;
+    var u = buildCleanUrl(overrides || {});
+    urlLinkEl.href = u;
+    urlLinkEl.textContent = u;
+  }
+
+  // Resolve the effective current value of a param (may differ from raw URL string)
+  function getEffective(def) {
+    var raw = _cpQ.get(def.name);
+    if (raw === null) return def['default'] !== undefined ? String(def['default']) : '';
+    return raw;
+  }
+
+  function isTruthy(v) {
+    return v !== '0' && v !== 'false' && v !== 'no' && v !== 'off' && v !== '';
+  }
+
+  function makeControl(def) {
+    var effective = getEffective(def);
+
+    if (def.type === 'toggle') {
+      var on = isTruthy(effective);
+      var btn = document.createElement('button');
+      btn.textContent = on ? '1 (on)' : '0 (off)';
+      btn.style.cssText = 'background:' + (on ? '#1b3d1b' : '#3d1b1b') + ';color:' +
+        (on ? '#6dca80' : '#e07070') + ';border:1px solid ' +
+        (on ? '#2a7a3a' : '#8a2a2a') + ';border-radius:3px;padding:3px 10px;' +
+        'cursor:pointer;font-size:12px;font-family:inherit;min-width:70px';
+      btn.addEventListener('click', function () {
+        var updates = {};
+        updates[def.name] = on ? '0' : '1';
+        window.location.href = buildCheatUrl(updates);
+      });
+      return btn;
+    }
+
+    if (def.type === 'select') {
+      var sel = document.createElement('select');
+      sel.style.cssText = 'background:#0d1b2a;color:#c8d8e8;border:1px solid #2a3f5f;' +
+        'border-radius:3px;padding:3px 8px;font-size:12px;font-family:inherit;cursor:pointer';
+      def.values.forEach(function (v) {
+        var opt = document.createElement('option');
+        opt.value = v; opt.textContent = v;
+        if (effective === String(v)) opt.selected = true;
+        sel.appendChild(opt);
+      });
+      sel.addEventListener('change', function () {
+        var updates = {}; updates[def.name] = sel.value;
+        window.location.href = buildCheatUrl(updates);
+      });
+      return sel;
+    }
+
+    if (def.type === 'number') {
+      var inp = document.createElement('input');
+      inp.type = 'number';
+      inp.value = effective;
+      if (def.min !== undefined) inp.min = String(def.min);
+      if (def.max !== undefined) inp.max = String(def.max);
+      if (def.step !== undefined) inp.step = String(def.step);
+      inp.style.cssText = 'background:#0d1b2a;color:#c8d8e8;border:1px solid #2a3f5f;' +
+        'border-radius:3px;padding:3px 6px;width:90px;font-size:12px;font-family:inherit';
+      inp.addEventListener('change', function () {
+        var updates = {}; updates[def.name] = inp.value;
+        window.location.href = buildCheatUrl(updates);
+      });
+      return inp;
+    }
+
+    // text
+    var inp2 = document.createElement('input');
+    inp2.type = 'text';
+    inp2.value = effective;
+    inp2.style.cssText = 'background:#0d1b2a;color:#c8d8e8;border:1px solid #2a3f5f;' +
+      'border-radius:3px;padding:3px 6px;width:220px;font-size:12px;font-family:inherit';
+    inp2.addEventListener('change', function () {
+      var updates = {}; updates[def.name] = inp2.value;
+      window.location.href = buildCheatUrl(updates);
+    });
+    return inp2;
+  }
+
+  function typeLabel(def) {
+    if (def.type === 'toggle') return '0 | 1';
+    if (def.type === 'select') return def.values.join(' | ');
+    if (def.type === 'number') {
+      var s = 'number';
+      if (def.min !== undefined && def.max !== undefined) s = def.min + '–' + def.max;
+      else if (def.min !== undefined) s = '≥' + def.min;
+      else if (def.max !== undefined) s = '≤' + def.max;
+      return s;
+    }
+    return 'text';
+  }
+
+  function render() {
+    // Panel container (fixed at bottom)
+    var panel = document.createElement('div');
+    panel.id = 'cheat-panel';
+    panel.style.cssText = [
+      'position:fixed', 'bottom:0', 'left:0', 'right:0',
+      'background:rgba(12,18,32,0.97)',
+      'color:#c8d8e8',
+      'font-family:"Segoe UI",system-ui,monospace',
+      'font-size:13px',
+      'border-top:2px solid #3a7bd5',
+      'z-index:2147483647',
+      'max-height:48vh',
+      'overflow-y:auto',
+      'padding:10px 16px 14px',
+      'box-sizing:border-box',
+      'box-shadow:0 -4px 24px rgba(0,0,0,0.6)'
+    ].join(';');
+
+    // Title bar
+    var title = document.createElement('div');
+    title.style.cssText = 'font-weight:bold;font-size:13px;color:#7ab8f5;margin-bottom:8px;' +
+      'display:flex;align-items:center;justify-content:space-between';
+    var titleText = document.createElement('span');
+    titleText.textContent = '🔑 Cheat Panel — ' + location.pathname.split('/').pop();
+    var closeBtn = document.createElement('button');
+    closeBtn.textContent = '×';
+    closeBtn.title = 'Close cheat panel (reload to restore)';
+    closeBtn.style.cssText = 'background:none;border:none;color:#7ab8f5;font-size:18px;' +
+      'cursor:pointer;padding:0 4px;line-height:1';
+    closeBtn.addEventListener('click', function () { panel.remove(); });
+    title.appendChild(titleText);
+    title.appendChild(closeBtn);
+    panel.appendChild(title);
+
+    // Table
+    var table = document.createElement('table');
+    table.style.cssText = 'border-collapse:collapse;width:100%;margin-bottom:10px';
+    var thead = table.createTHead();
+    var hrow = thead.insertRow();
+    ['Parameter', 'Type / Values', 'Control', 'Description'].forEach(function (h) {
+      var th = document.createElement('th');
+      th.textContent = h;
+      th.style.cssText = 'text-align:left;padding:4px 10px;border-bottom:1px solid #1e3050;' +
+        'color:#5a8fc0;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;' +
+        'white-space:nowrap';
+      hrow.appendChild(th);
+    });
+    var tbody = table.createTBody();
+    CHEAT_DEFS.forEach(function (def) {
+      var row = tbody.insertRow();
+      var isSet = _cpQ.has(def.name);
+      row.style.cssText = 'border-bottom:1px solid #131f30;' +
+        (isSet ? 'background:rgba(58,123,213,0.08)' : '');
+
+      // Name cell
+      var nc = row.insertCell();
+      nc.style.cssText = 'padding:5px 10px;font-weight:bold;font-size:12px;' +
+        'color:' + (isSet ? '#a8d4ff' : '#7fa8d0') + ';white-space:nowrap;font-family:monospace';
+      nc.textContent = def.name;
+
+      // Type cell
+      var tc = row.insertCell();
+      tc.style.cssText = 'padding:5px 10px;color:#5a7a90;font-size:11px;' +
+        'max-width:200px;font-family:monospace';
+      tc.textContent = typeLabel(def);
+
+      // Control cell
+      var cc = row.insertCell();
+      cc.style.cssText = 'padding:4px 10px;white-space:nowrap';
+      cc.appendChild(makeControl(def));
+
+      // Desc cell
+      var dc = row.insertCell();
+      dc.style.cssText = 'padding:5px 10px;color:#8aa0b0;font-size:12px';
+      dc.textContent = (def.desc || '') + (def['default'] !== undefined
+        ? ' (default: ' + def['default'] + ')' : '');
+    });
+    panel.appendChild(table);
+
+    // URL display
+    var urlBox = document.createElement('div');
+    urlBox.style.cssText = 'background:#080d1a;border:1px solid #1e3050;border-radius:4px;' +
+      'padding:7px 12px;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap';
+    var urlLabel = document.createElement('span');
+    urlLabel.style.cssText = 'color:#5a8fc0;font-size:11px;text-transform:uppercase;' +
+      'letter-spacing:0.06em;white-space:nowrap;flex-shrink:0';
+    urlLabel.textContent = 'URL:';
+    urlLinkEl = document.createElement('a');
+    urlLinkEl.style.cssText = 'color:#5fba7d;word-break:break-all;font-size:12px;' +
+      'font-family:monospace;text-decoration:none';
+    urlLinkEl.addEventListener('click', function (e) {
+      e.preventDefault();
+      window.location.href = buildCheatUrl({});
+    });
+    var copyBtn = document.createElement('button');
+    copyBtn.textContent = 'copy';
+    copyBtn.style.cssText = 'background:#1a3050;color:#7ab8f5;border:1px solid #2a4a70;' +
+      'border-radius:3px;padding:2px 8px;font-size:11px;font-family:inherit;cursor:pointer;' +
+      'white-space:nowrap;flex-shrink:0;margin-left:4px';
+    copyBtn.addEventListener('click', function () {
+      var url = urlLinkEl ? urlLinkEl.href : buildCleanUrl({});
+      navigator.clipboard.writeText(url).then(function () {
+        copyBtn.textContent = 'copied!';
+        copyBtn.style.color = '#6dca80';
+        setTimeout(function () { copyBtn.textContent = 'copy'; copyBtn.style.color = '#7ab8f5'; }, 1500);
+      }).catch(function () {
+        copyBtn.textContent = 'failed';
+        setTimeout(function () { copyBtn.textContent = 'copy'; }, 1500);
+      });
+    });
+    updateUrlDisplay();
+    urlBox.appendChild(urlLabel);
+    urlBox.appendChild(urlLinkEl);
+    urlBox.appendChild(copyBtn);
+    panel.appendChild(urlBox);
+
+    document.body.appendChild(panel);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', render);
+  } else {
+    render();
+  }
+})();
+</script>
+</body>
+</html>

@@ -4,61 +4,36 @@
   <meta charset="UTF-8">
   <title>LC Circuit</title>
   <!-- Original AoPS interactive. Replaces the third-party "Circuit Construction Kit: DC" simulation. -->
-<script>
-// responsive-scale-to-fit v1 -- replaces fixed-size embedding + EigenNode auto-height.
-// Scales the whole sim (the document body) to fit the iframe/sticky it is
-// given, preserving aspect ratio, centred, capped at a maximum zoom. Pointer
-// math is unchanged: offsetX/offsetY and getBoundingClientRect-ratio mapping
-// are both correct under a CSS transform. Tunable per embed: ?maxscale= (zoom
-// cap), ?maxw= (px width cap), ?h= (exact reported height), ?maxh= (anti-spill
-// report ceiling). NOTE: the AoPS live-chat embed sizes the iframe from its
-// height= attribute and ignores the reported height; set height= there.
-(function () {
-  var DOC = document.documentElement;
-  var Q = new URLSearchParams(location.search);
-  var num = function (k, d) { return Q.has(k) && isFinite(+Q.get(k)) ? +Q.get(k) : d; };
-  var MAXSCALE = num('maxscale', 2.4), MAXW = num('maxw', 0);
-  var FIXED_H = num('h', 0), REPORT_MAX = num('maxh', 320), REPORT_MIN = 140;
-  var lastH = 0;
-  function fit() {
-    var b = document.body; if (!b) return;
-    var natW = b.offsetWidth, natH = b.offsetHeight;
-    if (!natW || !natH) return;
-    var vw = DOC.clientWidth, vh = DOC.clientHeight;
-    var cap = MAXW > 0 ? Math.min(MAXSCALE, MAXW / natW) : MAXSCALE;
-    var s = Math.min(vw / natW, vh / natH, cap);
-    if (!isFinite(s) || s <= 0) s = Math.min(vw / natW, cap);
-    b.style.transform = 'translate(-50%, -50%) scale(' + s + ')';
-    var rh = FIXED_H > 0 ? Math.max(80, Math.min(2000, FIXED_H))
-      : Math.max(REPORT_MIN, Math.min(REPORT_MAX, Math.round(natH * Math.min(vw / natW, cap))));
-    if (Math.abs(rh - lastH) >= 2) { lastH = rh; try { window.parent.postMessage({ type: 'resize', height: rh }, '*'); } catch (e) {} }
-  }
-  function boot() {
-    var b = document.body; if (!b) return;
-    DOC.style.cssText += ';width:100%;height:100%;margin:0;overflow:hidden;background:transparent;';
-    b.style.position = 'absolute'; b.style.top = '50%'; b.style.left = '50%';
-    b.style.margin = '0'; b.style.transformOrigin = 'center center'; b.style.willChange = 'transform';
-    fit();
-    addEventListener('resize', fit); addEventListener('orientationchange', fit);
-    if (window.ResizeObserver) new ResizeObserver(fit).observe(DOC);
-    if (document.fonts && document.fonts.ready) document.fonts.ready.then(fit);
-  }
-  if (document.body) boot(); else addEventListener('DOMContentLoaded', boot);
-  addEventListener('load', fit);
-})();
-</script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="eigennode-aspect" content="6/5">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; }
     body {
-      width: 500px; height: 420px; overflow: hidden;
+      overflow: hidden;
       background: #f5f7fa;
       font-family: 'Segoe UI', system-ui, sans-serif;
       user-select: none;
       -webkit-user-select: none;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
     }
-    canvas { display: block; }
+    #cwrap {
+      flex: 1 1 auto;
+      min-height: 0;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    canvas { display: block; max-width: 100%; max-height: 100%; }
     #ui {
-      width: 500px; height: 52px; padding: 0 10px;
+      flex: 0 0 auto;
+      width: 100%;
+      max-width: 500px;
+      height: 52px; padding: 0 10px;
       font-size: 12px; color: #334455;
       display: flex; align-items: center; gap: 10px;
     }
@@ -73,7 +48,7 @@
   </style>
 </head>
 <body>
-  <canvas id="c" width="500" height="368"></canvas>
+  <div id="cwrap"><canvas id="c" width="500" height="368"></canvas></div>
   <div id="ui">
     <button id="playBtn">&#10074;&#10074;</button>
     <button id="resetBtn">&#8634;</button>
@@ -89,7 +64,6 @@
     const W = 500, H = 368;
     const dpr = window.devicePixelRatio || 1;
     canvas.width = W * dpr; canvas.height = H * dpr;
-    canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
     ctx.scale(dpr, dpr);
 
     const Q = new URLSearchParams(location.search);
